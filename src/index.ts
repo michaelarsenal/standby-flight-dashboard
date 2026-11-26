@@ -474,7 +474,14 @@ export default {
       if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
       const body = (await request.json()) as {
         flightKey: string;
+        airline?: string;
+        flightNumber?: string;
+        origin?: string;
+        destination?: string;
+        departureDate?: string;
+        departureTime?: string;
         aircraft?: string;
+        efBuckets?: string;
         status?: "ok" | "unavailable";
         cabins?: Record<CabinKey, CabinSeatSummary>;
         note?: string;
@@ -484,41 +491,48 @@ export default {
       }
       const watches = await listWatches(env.DB);
       const w = watches.find((x) => x.flight_key === body.flightKey);
-      if (!w) {
-        return jsonResponse({ error: "Watch not found" }, 404);
+      const airline = w?.airline || body.airline || "";
+      const flightNumber = w?.flight_number || body.flightNumber || "";
+      const origin = w?.origin || body.origin || "";
+      const destination = w?.destination || body.destination || "";
+      const departureDate = w?.departure_date || body.departureDate || "";
+      const departureTime = w?.departure_time || body.departureTime || "18:00";
+
+      if (!w && !(airline && flightNumber && origin && destination && departureDate)) {
+        return jsonResponse({ error: "Watch not found and flight metadata incomplete" }, 404);
       }
 
       if (body.status === "unavailable" || !body.cabins) {
         // Preserve last-known-good snapshot when seat map locks inside T-60m
         return jsonResponse({
           ok: true,
-          flightKey: w.flight_key,
+          flightKey: body.flightKey,
           preservedLastKnownGood: true,
           note: body.note || "Seat map unavailable; preserved last known snapshot",
         });
       }
 
-      const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
-      const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "");
+      const fareBuckets = parseFareBuckets(w?.ef_buckets || body.efBuckets || null, airline);
+      const hrs = hoursUntilDeparture(departureDate, departureTime);
       const rescored = computeStandbyScore({
         cabins: body.cabins,
-        targetCabin: (w.target_cabin || "economy") as CabinKey,
+        targetCabin: ((w?.target_cabin || "economy") as CabinKey),
         fareBuckets,
         disruptions: [],
         hoursToDeparture: hrs,
       });
 
       const candidate: FlightCandidate = {
-        flightKey: w.flight_key,
-        airline: w.airline,
-        flightNumber: w.flight_number,
-        origin: w.origin,
-        destination: w.destination,
-        departureDate: w.departure_date,
-        departureTime: w.departure_time || "",
+        flightKey: body.flightKey,
+        airline,
+        flightNumber,
+        origin,
+        destination,
+        departureDate,
+        departureTime,
         arrivalTime: "",
         duration: "",
-        aircraft: body.aircraft || w.aircraft || "",
+        aircraft: body.aircraft || w?.aircraft || "",
         dataSource: "live",
         cabins: body.cabins,
         fareBuckets,
@@ -526,25 +540,28 @@ export default {
         standbyScore: rescored.score,
         readiness: rescored.readiness,
         reasons: rescored.reasons,
-        watched: true,
+        watched: Boolean(w),
       };
 
       const note = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
       await recordSnapshot(env.DB, candidate, hrs, note);
 
-      if (w.last_status && w.last_status !== rescored.readiness) {
-        await sendStandbyAlert(
-          env,
-          candidate,
-          w.last_status,
-          rescored.reasons.join("; ")
-        );
+      if (w) {
+        if (w.last_status && w.last_status !== rescored.readiness) {
+          await sendStandbyAlert(
+            env,
+            candidate,
+            w.last_status,
+            rescored.reasons.join("; ")
+          );
+        }
+        await updateWatchStatus(env.DB, w.flight_key, rescored.readiness, rescored.score);
       }
 
-      await updateWatchStatus(env.DB, w.flight_key, rescored.readiness, rescored.score);
       return jsonResponse({
         ok: true,
-        flightKey: w.flight_key,
+        flightKey: body.flightKey,
+        watched: Boolean(w),
         score: rescored.score,
         readiness: rescored.readiness,
         hoursToDeparture: hrs,

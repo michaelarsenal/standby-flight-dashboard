@@ -178,27 +178,8 @@ def fetch_seatmaps(
 
         page.on("response", on_resp)
 
-        first_q = queries[0]
-        first_target = (
-            "/air/seat-map/results?"
-            + urllib.parse.urlencode(
-                {
-                    "departingAirport": first_q["origin"],
-                    "arrivingAirport": first_q["destination"],
-                    "departDate": first_q["departure_date"],
-                    "airline": first_q["airline"],
-                    "flightNumber": first_q["flight_num"],
-                    "paxID": "passenger1",
-                    "ptc": "ADT",
-                    "withRawXML": "false",
-                    "cabinClass": "F,J,W,Y",
-                }
-            )
-        )
-
         page.goto(
-            "https://www.expertflyer.com/sign-in?redirect_url="
-            + urllib.parse.quote(first_target, safe=""),
+            "https://www.expertflyer.com/sign-in?redirect_url=%2Fdashboard",
             wait_until="domcontentloaded",
             timeout=25000,
         )
@@ -206,30 +187,29 @@ def fetch_seatmaps(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_url("**/air/seat-map/results**", wait_until="commit", timeout=25000)
-        page.wait_for_timeout(10000)
+        page.wait_for_url("**/dashboard**", wait_until="commit", timeout=25000)
+        page.wait_for_timeout(2000)
 
-        for idx, q in enumerate(queries):
-            if idx > 0:
-                captured["body"] = ""
-                target_url = (
-                    "https://www.expertflyer.com/air/seat-map/results?"
-                    + urllib.parse.urlencode(
-                        {
-                            "departingAirport": q["origin"],
-                            "arrivingAirport": q["destination"],
-                            "departDate": q["departure_date"],
-                            "airline": q["airline"],
-                            "flightNumber": q["flight_num"],
-                            "paxID": "passenger1",
-                            "ptc": "ADT",
-                            "withRawXML": "false",
-                            "cabinClass": "F,J,W,Y",
-                        }
-                    )
+        for q in queries:
+            captured["body"] = ""
+            target_url = (
+                "https://www.expertflyer.com/air/seat-map/results?"
+                + urllib.parse.urlencode(
+                    {
+                        "departingAirport": q["origin"],
+                        "arrivingAirport": q["destination"],
+                        "departDate": q["departure_date"],
+                        "airline": q["airline"],
+                        "flightNumber": q["flight_num"],
+                        "paxID": "passenger1",
+                        "ptc": "ADT",
+                        "withRawXML": "false",
+                        "cabinClass": "F,J,W,Y",
+                    }
                 )
-                page.goto(target_url, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(10000)
+            )
+            page.goto(target_url, wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(8000)
 
             parsed = parse_seatmap_payload(captured["body"])
             results.append({"query": q, "parsed": parsed})
@@ -443,6 +423,7 @@ def main() -> int:
             avail_pairs.add((str(w["origin"]).upper(), str(w["destination"]).upper(), str(w["departure_date"])))
 
     avail_queries = [{"origin": o, "destination": d, "departure_date": dt} for (o, d, dt) in sorted(avail_pairs)]
+    avail_flights: list[dict[str, Any]] = []
     if avail_queries:
         try:
             avail_flights = fetch_availability(email, password, avail_queries[:6])
@@ -453,6 +434,7 @@ def main() -> int:
             print(f"[availability] warning: {e}", file=sys.stderr)
 
     queries = []
+    queued_keys: set[str] = set()
     for w in watches:
         due, hrs, reason = is_watch_due(w)
         if not due and hrs is not None and hrs >= -1.0 and hrs <= 336.0:
@@ -469,35 +451,91 @@ def main() -> int:
         fnum = str(w.get("flight_number") or "")
         airline = str(w.get("airline") or "").upper()
         digits = re.sub(r"^[A-Z]+", "", fnum.upper())
+        queued_keys.add(w["flight_key"])
         queries.append(
             {
                 "flightKey": w["flight_key"],
                 "airline": airline,
+                "flightNumber": fnum,
                 "flight_num": digits,
                 "origin": str(w["origin"]).upper(),
                 "destination": str(w["destination"]).upper(),
                 "departure_date": str(w["departure_date"]),
+                "departure_time": str(w.get("departure_time") or "18:00"),
+                "ef_buckets": str(w.get("ef_buckets") or ""),
                 "reason": reason,
             }
         )
 
+    # Pre-cache seat maps for all direct route flights (WAS <-> LHR) so searches show loads instantly
+    for af in avail_flights:
+        fk = af["flight_key"]
+        if fk in queued_keys:
+            continue
+        hrs = hours_until_departure(af["departure_date"], af.get("departure_time"))
+        if hrs is None or hrs < 0.8 or hrs > 48.0:
+            continue
+        # Refresh route cache if no snapshot in last 30 mins
+        try:
+            hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(fk, safe='')}")
+            snaps = hist.get("snapshots") or []
+            ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+            if ef_snaps:
+                last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                if not last_ts.endswith("Z") and "+" not in last_ts:
+                    last_ts += "+00:00"
+                age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                if age_mins < 30.0:
+                    continue
+        except Exception:
+            pass
+        queued_keys.add(fk)
+        digits = re.sub(r"^[A-Z0-9]{2}", "", af["flight_number"].upper())
+        queries.append(
+            {
+                "flightKey": fk,
+                "airline": af["airline"],
+                "flightNumber": af["flight_number"],
+                "flight_num": digits,
+                "origin": af["origin"],
+                "destination": af["destination"],
+                "departure_date": af["departure_date"],
+                "departure_time": af.get("departure_time") or "18:00",
+                "ef_buckets": af.get("ef_buckets") or "",
+                "reason": "route pre-cache",
+            }
+        )
+
     if not queries:
-        print("No watched flights due for ExpertFlyer sync.")
+        print("No flights due for ExpertFlyer sync.")
         return 0
 
-    fetched = fetch_seatmaps(email, password, queries)
+    fetched = fetch_seatmaps(email, password, queries[:18])
     for item in fetched:
         q = item["query"]
         parsed = item["parsed"]
         if parsed is None:
             payload = {
                 "flightKey": q["flightKey"],
+                "airline": q["airline"],
+                "flightNumber": q["flightNumber"],
+                "origin": q["origin"],
+                "destination": q["destination"],
+                "departureDate": q["departure_date"],
+                "departureTime": q.get("departure_time") or "18:00",
                 "status": "unavailable",
                 "note": f"ExpertFlyer seat map unavailable ({q['reason']})",
             }
         else:
             payload = {
                 "flightKey": q["flightKey"],
+                "airline": q["airline"],
+                "flightNumber": q["flightNumber"],
+                "origin": q["origin"],
+                "destination": q["destination"],
+                "departureDate": q["departure_date"],
+                "departureTime": q.get("departure_time") or "18:00",
+                "efBuckets": q.get("ef_buckets") or "",
                 "status": "ok",
                 "aircraft": parsed["aircraft"],
                 "cabins": parsed["cabins"],
