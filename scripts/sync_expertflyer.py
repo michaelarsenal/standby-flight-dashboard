@@ -344,21 +344,8 @@ def fetch_availability(
 
         page.on("response", on_resp)
 
-        q0 = avail_queries[0]
-        first_target = "/air/availability/results?" + urllib.parse.urlencode(
-            {
-                "origin": q0["origin"],
-                "destination": q0["destination"],
-                "departureDateTime": f"{q0['departure_date']}T00:00",
-                "alliance": "none",
-                "airLineCodes": "",
-                "excludeCodeshares": "true",
-                "pcc": "USA (Default)",
-                "resultsDisplay": "tabbed",
-            }
-        )
         page.goto(
-            "https://www.expertflyer.com/sign-in?redirect_url=" + urllib.parse.quote(first_target, safe=""),
+            "https://www.expertflyer.com/sign-in?redirect_url=%2Fdashboard",
             wait_until="domcontentloaded",
             timeout=25000,
         )
@@ -366,26 +353,25 @@ def fetch_availability(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_url("**/air/availability/results**", wait_until="commit", timeout=25000)
-        page.wait_for_timeout(8000)
+        page.wait_for_url("**/dashboard**", wait_until="commit", timeout=25000)
+        page.wait_for_timeout(2000)
 
-        for idx, q in enumerate(avail_queries):
-            if idx > 0:
-                captured["body"] = ""
-                u = "https://www.expertflyer.com/air/availability/results?" + urllib.parse.urlencode(
-                    {
-                        "origin": q["origin"],
-                        "destination": q["destination"],
-                        "departureDateTime": f"{q['departure_date']}T00:00",
-                        "alliance": "none",
-                        "airLineCodes": "",
-                        "excludeCodeshares": "true",
-                        "pcc": "USA (Default)",
-                        "resultsDisplay": "tabbed",
-                    }
-                )
-                page.goto(u, wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(8000)
+        for q in avail_queries:
+            captured["body"] = ""
+            u = "https://www.expertflyer.com/air/availability/results?" + urllib.parse.urlencode(
+                {
+                    "origin": q["origin"],
+                    "destination": q["destination"],
+                    "departureDateTime": f"{q['departure_date']}T00:00",
+                    "alliance": "none",
+                    "airLineCodes": "",
+                    "excludeCodeshares": "true",
+                    "pcc": "USA (Default)",
+                    "resultsDisplay": "tabbed",
+                }
+            )
+            page.goto(u, wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(8000)
             all_flights.extend(parse_availability_payload(captured["body"], q["departure_date"]))
 
         browser.close()
