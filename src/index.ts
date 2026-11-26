@@ -51,7 +51,7 @@ function cabinFromSnapshot(
 }
 
 function applyExpertFlyerSnapshot(
-  c: FlightCandidate,
+  c: { cabins: Record<CabinKey, CabinSeatSummary> },
   snap: SeatSnapshot | undefined
 ): Record<CabinKey, CabinSeatSummary> {
   if (!snap) return c.cabins;
