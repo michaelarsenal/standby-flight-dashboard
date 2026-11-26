@@ -155,3 +155,26 @@ export async function getSnapshots(db: D1Database, flightKey: string): Promise<S
     .all<SeatSnapshot>();
   return res.results ?? [];
 }
+
+export async function getLatestExpertFlyerSnapshots(
+  db: D1Database
+): Promise<Map<string, SeatSnapshot>> {
+  await ensureSchema(db);
+  const res = await db
+    .prepare(
+      `SELECT s.*
+       FROM snapshots s
+       INNER JOIN (
+         SELECT flight_key, MAX(id) AS max_id
+         FROM snapshots
+         WHERE raw_note LIKE 'ExpertFlyer%'
+         GROUP BY flight_key
+       ) latest ON s.id = latest.max_id`
+    )
+    .all<SeatSnapshot>();
+  const map = new Map<string, SeatSnapshot>();
+  for (const row of res.results ?? []) {
+    map.set(row.flight_key, row);
+  }
+  return map;
+}

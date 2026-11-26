@@ -2,6 +2,7 @@ import { expandAirportInput } from "./airports.ts";
 import { sendStandbyAlert } from "./alerts.ts";
 import {
   deleteWatch,
+  getLatestExpertFlyerSnapshots,
   getSnapshots,
   listWatches,
   recordSnapshot,
@@ -21,7 +22,7 @@ import {
   computeStandbyScore,
   parseFareBuckets,
 } from "./scoring.ts";
-import type { CabinKey, Env, FlightCandidate, RouteDisruption } from "./types.ts";
+import type { CabinKey, CabinSeatSummary, Env, FlightCandidate, RouteDisruption, SeatSnapshot } from "./types.ts";
 import { MANIFEST_JSON, renderHtml } from "./ui.ts";
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -32,6 +33,34 @@ function jsonResponse(data: unknown, status = 200): Response {
       "Access-Control-Allow-Origin": "*",
     },
   });
+}
+
+function cabinFromSnapshot(
+  open: number,
+  occupied: number,
+  blocked: number,
+  fallbackTotal: number
+): CabinSeatSummary {
+  const sum = open + occupied + blocked;
+  return {
+    available: open,
+    occupied,
+    blocked,
+    total: sum > 0 ? sum : fallbackTotal,
+  };
+}
+
+function applyExpertFlyerSnapshot(
+  c: FlightCandidate,
+  snap: SeatSnapshot | undefined
+): Record<CabinKey, CabinSeatSummary> {
+  if (!snap) return c.cabins;
+  return {
+    first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, c.cabins.first.total),
+    business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, c.cabins.business.total),
+    prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, c.cabins.prem_econ.total),
+    economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, c.cabins.economy.total),
+  };
 }
 
 function hoursUntilDeparture(date: string, time: string): number | null {
@@ -65,10 +94,12 @@ async function runFlightSearch(params: {
     .filter((a) => /^[A-Z0-9]{2}$/.test(a));
 
   const watchedKeys = new Set<string>();
+  let efSnapshots = new Map<string, SeatSnapshot>();
   if (env.DB) {
     try {
       const watches = await listWatches(env.DB);
       for (const w of watches) watchedKeys.add(w.flight_key);
+      efSnapshots = await getLatestExpertFlyerSnapshots(env.DB);
     } catch {
       // D1 not yet bound in local preview
     }
@@ -154,8 +185,10 @@ async function runFlightSearch(params: {
           inboundRiskPoints,
         });
 
+        const efSnap = efSnapshots.get(c.flightKey);
+        const cabins = applyExpertFlyerSnapshot(c, efSnap);
         const { score, readiness, reasons } = computeStandbyScore({
-          cabins: c.cabins,
+          cabins,
           targetCabin,
           fareBuckets: c.fareBuckets,
           disruptions: routeDisruptions,
@@ -164,11 +197,12 @@ async function runFlightSearch(params: {
         });
         return {
           ...c,
+          cabins,
           disruptions: routeDisruptions,
           disruptionRisk,
           standbyScore: score,
           readiness,
-          reasons,
+          reasons: efSnap ? [`ExpertFlyer seat map (${efSnap.captured_at.slice(0, 16)}Z)`, ...reasons] : reasons,
           watched: watchedKeys.has(c.flightKey),
         };
       })
@@ -338,6 +372,87 @@ export default {
       const flightKey = decodeURIComponent(path.slice("/api/history/".length));
       const snapshots = await getSnapshots(env.DB, flightKey);
       return jsonResponse({ snapshots });
+    }
+
+    if (path === "/api/expertflyer/ingest" && request.method === "POST") {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const body = (await request.json()) as {
+        flightKey: string;
+        aircraft?: string;
+        status?: "ok" | "unavailable";
+        cabins?: Record<CabinKey, CabinSeatSummary>;
+        note?: string;
+      };
+      if (!body.flightKey) {
+        return jsonResponse({ error: "Missing flightKey" }, 400);
+      }
+      const watches = await listWatches(env.DB);
+      const w = watches.find((x) => x.flight_key === body.flightKey);
+      if (!w) {
+        return jsonResponse({ error: "Watch not found" }, 404);
+      }
+
+      if (body.status === "unavailable" || !body.cabins) {
+        // Preserve last-known-good snapshot when seat map locks inside T-60m
+        return jsonResponse({
+          ok: true,
+          flightKey: w.flight_key,
+          preservedLastKnownGood: true,
+          note: body.note || "Seat map unavailable; preserved last known snapshot",
+        });
+      }
+
+      const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
+      const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "");
+      const rescored = computeStandbyScore({
+        cabins: body.cabins,
+        targetCabin: (w.target_cabin || "economy") as CabinKey,
+        fareBuckets,
+        disruptions: [],
+        hoursToDeparture: hrs,
+      });
+
+      const candidate: FlightCandidate = {
+        flightKey: w.flight_key,
+        airline: w.airline,
+        flightNumber: w.flight_number,
+        origin: w.origin,
+        destination: w.destination,
+        departureDate: w.departure_date,
+        departureTime: w.departure_time || "",
+        arrivalTime: "",
+        duration: "",
+        aircraft: body.aircraft || w.aircraft || "",
+        dataSource: "live",
+        cabins: body.cabins,
+        fareBuckets,
+        disruptions: [],
+        standbyScore: rescored.score,
+        readiness: rescored.readiness,
+        reasons: rescored.reasons,
+        watched: true,
+      };
+
+      const note = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
+      await recordSnapshot(env.DB, candidate, hrs, note);
+
+      if (w.last_status && w.last_status !== rescored.readiness) {
+        await sendStandbyAlert(
+          env,
+          candidate,
+          w.last_status,
+          rescored.reasons.join("; ")
+        );
+      }
+
+      await updateWatchStatus(env.DB, w.flight_key, rescored.readiness, rescored.score);
+      return jsonResponse({
+        ok: true,
+        flightKey: w.flight_key,
+        score: rescored.score,
+        readiness: rescored.readiness,
+        hoursToDeparture: hrs,
+      });
     }
 
     return jsonResponse({ error: "Not found" }, 404);
