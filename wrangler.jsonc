@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "standby-flight-db",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "3a76e1f4-90bc-4fb7-aa3b-36ce7caf6058"
     }
   ]
 }
