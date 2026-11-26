@@ -239,6 +239,160 @@ def fetch_seatmaps(
     return results
 
 
+def parse_availability_payload(raw_text: str, dep_date: str) -> list[dict[str, Any]]:
+    obj = None
+    for line in raw_text.splitlines():
+        if '"searchResults"' in line and '"itineraries"' in line and ":" in line:
+            _, rest = line.split(":", 1)
+            try:
+                obj = json.loads(rest)
+                break
+            except Exception:
+                continue
+    if not obj or not isinstance(obj.get("searchResults"), dict):
+        return []
+
+    flights: list[dict[str, Any]] = []
+    for day in obj["searchResults"].get("departure") or []:
+        d_str = str(day.get("date") or dep_date)
+        itins = (day.get("data") or {}).get("itineraries") or []
+        for it in itins:
+            segs = it.get("segments") or []
+            if len(segs) != 1:
+                continue
+            s = segs[0]
+            airline = str(s.get("marketingAirlineCode") or "").upper()
+            fnum_digits = str(s.get("flightNumber") or "").strip()
+            origin = str(s.get("departureAirport") or "").upper()
+            dest = str(s.get("arrivalAirport") or "").upper()
+            if not (airline and fnum_digits and origin and dest):
+                continue
+            flight_number = f"{airline}{fnum_digits}"
+            dep_dt = str(s.get("departureDateTime") or "")
+            arr_dt = str(s.get("arrivalDateTime") or "")
+            dep_time = dep_dt.split("T")[-1][:5] if "T" in dep_dt else "00:00"
+            arr_time = arr_dt.split("T")[-1][:5] if "T" in arr_dt else "00:00"
+            buckets = " ".join(
+                f"{b.get('code')}{b.get('availability')}"
+                for b in (s.get("bookingClassAvailability") or [])
+                if b.get("code") is not None and b.get("availability") is not None
+            )
+            flights.append(
+                {
+                    "flight_key": f"{flight_number}-{origin}-{dest}-{d_str}",
+                    "airline": airline,
+                    "flight_number": flight_number,
+                    "origin": origin,
+                    "destination": dest,
+                    "departure_date": d_str,
+                    "departure_time": dep_time,
+                    "arrival_time": arr_time,
+                    "aircraft": str(s.get("airEquipType") or "Widebody"),
+                    "ef_buckets": buckets,
+                }
+            )
+    return flights
+
+
+def fetch_availability(
+    email: str,
+    password: str,
+    avail_queries: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    all_flights: list[dict[str, Any]] = []
+    if not avail_queries:
+        return all_flights
+
+    with sync_playwright() as p:
+        browser = p.firefox.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+        )
+        page = ctx.new_page()
+        page.route(
+            "**/*",
+            lambda route: route.abort()
+            if (
+                route.request.resource_type in ("image", "media", "font", "stylesheet")
+                or any(
+                    x in route.request.url
+                    for x in [
+                        "cookielaw",
+                        "onetrust",
+                        "sentry",
+                        "googletagmanager",
+                        "clarity",
+                        "doubleclick",
+                        "hotjar",
+                        "intercom",
+                    ]
+                )
+            )
+            else route.continue_(),
+        )
+
+        captured: dict[str, str] = {"body": ""}
+
+        def on_resp(r: Any) -> None:
+            if "/air/availability/results" in r.url and r.request.method == "POST":
+                try:
+                    txt = r.text()
+                    if len(txt) > len(captured["body"]):
+                        captured["body"] = txt
+                except Exception:
+                    pass
+
+        page.on("response", on_resp)
+
+        q0 = avail_queries[0]
+        first_target = "/air/availability/results?" + urllib.parse.urlencode(
+            {
+                "origin": q0["origin"],
+                "destination": q0["destination"],
+                "departureDateTime": f"{q0['departure_date']}T00:00",
+                "alliance": "none",
+                "airLineCodes": "",
+                "excludeCodeshares": "true",
+                "pcc": "USA (Default)",
+                "resultsDisplay": "tabbed",
+            }
+        )
+        page.goto(
+            "https://www.expertflyer.com/sign-in?redirect_url=" + urllib.parse.quote(first_target, safe=""),
+            wait_until="domcontentloaded",
+            timeout=25000,
+        )
+        page.wait_for_selector("#clerk-sign-in-email", timeout=15000)
+        page.fill("#clerk-sign-in-email", email)
+        page.fill("#clerk-sign-in-password", password)
+        page.locator("button[type=submit]").first.click()
+        page.wait_for_url("**/air/availability/results**", wait_until="commit", timeout=25000)
+        page.wait_for_timeout(8000)
+
+        for idx, q in enumerate(avail_queries):
+            if idx > 0:
+                captured["body"] = ""
+                u = "https://www.expertflyer.com/air/availability/results?" + urllib.parse.urlencode(
+                    {
+                        "origin": q["origin"],
+                        "destination": q["destination"],
+                        "departureDateTime": f"{q['departure_date']}T00:00",
+                        "alliance": "none",
+                        "airLineCodes": "",
+                        "excludeCodeshares": "true",
+                        "pcc": "USA (Default)",
+                        "resultsDisplay": "tabbed",
+                    }
+                )
+                page.goto(u, wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(8000)
+            all_flights.extend(parse_availability_payload(captured["body"], q["departure_date"]))
+
+        browser.close()
+
+    return all_flights
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync ExpertFlyer seat maps to standby-flight-dashboard.")
     parser.add_argument("--worker-url", default=os.environ.get("STANDBY_WORKER_URL") or DEFAULT_WORKER_URL)
@@ -246,6 +400,7 @@ def main() -> int:
     parser.add_argument("--origin", help="Optional origin IATA e.g. IAD")
     parser.add_argument("--destination", help="Optional destination IATA e.g. LHR")
     parser.add_argument("--date", help="Optional YYYY-MM-DD")
+    parser.add_argument("--avail", action="store_true", help="Sync Flight Availability for --origin/--destination/--date")
     args = parser.parse_args()
 
     email = os.environ.get("EXPERTFLYER_EMAIL", "").strip()
@@ -253,6 +408,18 @@ def main() -> int:
     if not email or not password:
         print("ERROR: EXPERTFLYER_EMAIL and EXPERTFLYER_PASSWORD must be set.", file=sys.stderr)
         return 1
+
+    if args.avail and args.origin and args.destination and args.date:
+        flights = fetch_availability(
+            email,
+            password,
+            [{"origin": args.origin.upper(), "destination": args.destination.upper(), "departure_date": args.date}],
+        )
+        print(f"Fetched {len(flights)} direct flights from ExpertFlyer availability")
+        if flights:
+            resp = http_json(f"{args.worker_url.rstrip('/')}/api/expertflyer/flights", {"flights": flights})
+            print("Ingested availability ->", resp)
+        return 0
 
     if args.flight and args.origin and args.destination and args.date:
         m = re.match(r"^([A-Za-z]{2})\s*(\d+)$", args.flight.strip().upper())
@@ -274,8 +441,31 @@ def main() -> int:
         print(json.dumps(res, indent=2))
         return 0
 
+    # Sync ExpertFlyer Flight Availability for default routes (today & tomorrow) + any watched routes
+    from datetime import timedelta
+    today_dt = datetime.now(timezone.utc)
+    avail_pairs = set()
+    for off in (0, 1):
+        d_str = (today_dt + timedelta(days=off)).strftime("%Y-%m-%d")
+        avail_pairs.add(("WAS", "LHR", d_str))
+        avail_pairs.add(("LHR", "WAS", d_str))
+
     watches_resp = http_json(f"{args.worker_url.rstrip('/')}/api/watches")
     watches = watches_resp.get("watches") or []
+    for w in watches:
+        if w.get("origin") and w.get("destination") and w.get("departure_date"):
+            avail_pairs.add((str(w["origin"]).upper(), str(w["destination"]).upper(), str(w["departure_date"])))
+
+    avail_queries = [{"origin": o, "destination": d, "departure_date": dt} for (o, d, dt) in sorted(avail_pairs)]
+    if avail_queries:
+        try:
+            avail_flights = fetch_availability(email, password, avail_queries[:6])
+            if avail_flights:
+                resp = http_json(f"{args.worker_url.rstrip('/')}/api/expertflyer/flights", {"flights": avail_flights})
+                print(f"[availability] synced {len(avail_flights)} direct flights -> {resp}")
+        except Exception as e:
+            print(f"[availability] warning: {e}", file=sys.stderr)
+
     queries = []
     for w in watches:
         due, hrs, reason = is_watch_due(w)

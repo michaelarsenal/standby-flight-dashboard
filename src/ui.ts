@@ -307,6 +307,25 @@ export function renderHtml(): string {
         <span>Watched Flights (T-24h Polling &amp; Alerts)</span>
         <button class="btn-ghost" onclick="loadWatches()">Refresh</button>
       </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:12px;">
+        <div>
+          <label for="mwFlight">Flight (e.g. BA292)</label>
+          <input id="mwFlight" type="text" placeholder="BA292" style="width:105px" />
+        </div>
+        <div>
+          <label for="mwOrigin">Origin</label>
+          <input id="mwOrigin" type="text" placeholder="IAD" maxlength="3" style="width:72px" />
+        </div>
+        <div>
+          <label for="mwDest">Dest</label>
+          <input id="mwDest" type="text" placeholder="LHR" maxlength="3" style="width:72px" />
+        </div>
+        <div>
+          <label for="mwDate">Date</label>
+          <input id="mwDate" type="date" style="width:145px" />
+        </div>
+        <button class="btn-ghost" onclick="addManualWatch()" style="height:36px">+ Watch Flight #</button>
+      </div>
       <div id="watchesList" class="subtitle">Loading watched flights...</div>
     </div>
   </div>
@@ -462,6 +481,30 @@ export function renderHtml(): string {
         c.watched = true;
       }
       renderCandidates(targetCabin);
+      loadWatches();
+    }
+
+    async function addManualWatch() {
+      const flight = document.getElementById("mwFlight").value.trim().toUpperCase();
+      const origin = document.getElementById("mwOrigin").value.trim().toUpperCase();
+      const destination = document.getElementById("mwDest").value.trim().toUpperCase();
+      const departureDate = document.getElementById("mwDate").value || document.getElementById("date").value;
+      const targetCabin = document.getElementById("targetCabin").value;
+      if (!flight || !origin || !destination || !departureDate) {
+        alert("Enter flight (e.g. BA292), origin, destination, and date.");
+        return;
+      }
+      const res = await fetch("/api/watches/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flight, origin, destination, departureDate, targetCabin })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to add watch");
+        return;
+      }
+      document.getElementById("mwFlight").value = "";
       loadWatches();
     }
 

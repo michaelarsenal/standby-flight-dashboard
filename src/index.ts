@@ -4,10 +4,13 @@ import {
   deleteWatch,
   getLatestExpertFlyerSnapshots,
   getSnapshots,
+  listEfFlights,
   listWatches,
   recordSnapshot,
   updateWatchStatus,
+  upsertEfFlights,
   upsertWatch,
+  type EfFlightRow,
 } from "./db.ts";
 import { buildDemoCandidates } from "./providers/demo.ts";
 import { fetchDuffelCandidates } from "./providers/duffel.ts";
@@ -95,11 +98,13 @@ async function runFlightSearch(params: {
 
   const watchedKeys = new Set<string>();
   let efSnapshots = new Map<string, SeatSnapshot>();
+  let efFlights: EfFlightRow[] = [];
   if (env.DB) {
     try {
       const watches = await listWatches(env.DB);
       for (const w of watches) watchedKeys.add(w.flight_key);
       efSnapshots = await getLatestExpertFlyerSnapshots(env.DB);
+      efFlights = await listEfFlights(env.DB, date);
     } catch {
       // D1 not yet bound in local preview
     }
@@ -133,6 +138,52 @@ async function runFlightSearch(params: {
       airlines,
     });
 
+    // Merge ExpertFlyer operating flight numbers & fare buckets over Duffel codeshares
+    const matchedEfKeys = new Set<string>();
+    const mergedRaw = rawCandidates.map((c) => {
+      const efMatch = efFlights.find(
+        (ef) =>
+          ef.flight_key === c.flightKey ||
+          (ef.airline === c.airline &&
+            ef.origin === c.origin &&
+            ef.destination === c.destination &&
+            ef.departure_time === c.departureTime)
+      );
+      if (!efMatch) return c;
+      matchedEfKeys.add(efMatch.flight_key);
+      return {
+        ...c,
+        flightKey: efMatch.flight_key,
+        flightNumber: efMatch.flight_number,
+        arrivalTime: efMatch.arrival_time || c.arrivalTime,
+        aircraft: efMatch.aircraft || c.aircraft,
+        fareBuckets: efMatch.ef_buckets ? parseFareBuckets(efMatch.ef_buckets, c.airline) : c.fareBuckets,
+      };
+    });
+
+    // Include any ExpertFlyer flights on queried route/airlines that Duffel omitted
+    for (const ef of efFlights) {
+      if (matchedEfKeys.has(ef.flight_key)) continue;
+      if (!origins.includes(ef.origin) || !destinations.includes(ef.destination)) continue;
+      if (airlines.length > 0 && !airlines.includes(ef.airline)) continue;
+      const empty = { available: 0, occupied: 0, blocked: 0, total: 0 };
+      mergedRaw.push({
+        flightKey: ef.flight_key,
+        airline: ef.airline,
+        flightNumber: ef.flight_number,
+        origin: ef.origin,
+        destination: ef.destination,
+        departureDate: ef.departure_date,
+        departureTime: ef.departure_time,
+        arrivalTime: ef.arrival_time || "00:00",
+        duration: "",
+        aircraft: ef.aircraft || "Widebody",
+        dataSource: "live",
+        cabins: { first: { ...empty }, business: { ...empty }, prem_econ: { ...empty }, economy: { ...empty } },
+        fareBuckets: ef.ef_buckets ? parseFareBuckets(ef.ef_buckets, ef.airline) : null,
+      });
+    }
+
     const allDisruptions: RouteDisruption[] = [];
     if (env.FLIGHTAWARE_API_KEY) {
       for (const o of origins) {
@@ -151,7 +202,7 @@ async function runFlightSearch(params: {
     }
 
     const candidates: FlightCandidate[] = await Promise.all(
-      rawCandidates.map(async (c) => {
+      mergedRaw.map(async (c) => {
         const routeDisruptions = allDisruptions.filter(
           (d) => d.airline === c.airline && d.origin === c.origin && d.destination === c.destination
         );
@@ -360,6 +411,51 @@ export default {
       return jsonResponse({ ok: true });
     }
 
+    if (path === "/api/watches/manual" && request.method === "POST") {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const body = (await request.json()) as {
+        flight: string;
+        origin: string;
+        destination: string;
+        departureDate: string;
+        targetCabin?: CabinKey;
+      };
+      const rawFlight = String(body.flight || "").trim().toUpperCase().replace(/\s+/g, "");
+      const m = rawFlight.match(/^([A-Z0-9]{2})(\d+)$/);
+      const origin = String(body.origin || "").trim().toUpperCase();
+      const dest = String(body.destination || "").trim().toUpperCase();
+      const date = String(body.departureDate || "").trim();
+      if (!m || origin.length !== 3 || dest.length !== 3 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return jsonResponse({ error: "Invalid flight, origin, destination, or date" }, 400);
+      }
+      const airline = m[1];
+      const flightNumber = `${airline}${parseInt(m[2], 10)}`;
+      const flightKey = `${flightNumber}-${origin}-${dest}-${date}`;
+      const empty = { available: 0, occupied: 0, blocked: 0, total: 0 };
+      const candidate: FlightCandidate = {
+        flightKey,
+        airline,
+        flightNumber,
+        origin,
+        destination: dest,
+        departureDate: date,
+        departureTime: "18:00",
+        arrivalTime: "",
+        duration: "",
+        aircraft: "",
+        dataSource: "live",
+        cabins: { first: { ...empty }, business: { ...empty }, prem_econ: { ...empty }, economy: { ...empty } },
+        fareBuckets: null,
+        disruptions: [],
+        standbyScore: 50,
+        readiness: "amber",
+        reasons: ["Manual ExpertFlyer watch (awaiting sync)"],
+        watched: true,
+      };
+      await upsertWatch(env.DB, candidate, body.targetCabin || "economy", null);
+      return jsonResponse({ ok: true, flightKey });
+    }
+
     if (path.startsWith("/api/watches/") && request.method === "DELETE") {
       if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
       const flightKey = decodeURIComponent(path.slice("/api/watches/".length));
@@ -453,6 +549,16 @@ export default {
         readiness: rescored.readiness,
         hoursToDeparture: hrs,
       });
+    }
+
+    if (path === "/api/expertflyer/flights" && request.method === "POST") {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const body = (await request.json()) as {
+        flights?: Omit<EfFlightRow, "updated_at">[];
+      };
+      const flights = Array.isArray(body.flights) ? body.flights : [];
+      await upsertEfFlights(env.DB, flights);
+      return jsonResponse({ ok: true, count: flights.length });
     }
 
     return jsonResponse({ error: "Not found" }, 404);

@@ -41,6 +41,19 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       status TEXT DEFAULT 'amber',
       raw_note TEXT
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS ef_flights (
+      flight_key TEXT PRIMARY KEY,
+      airline TEXT NOT NULL,
+      flight_number TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      destination TEXT NOT NULL,
+      departure_date TEXT NOT NULL,
+      departure_time TEXT NOT NULL,
+      arrival_time TEXT,
+      aircraft TEXT,
+      ef_buckets TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
   ]);
 }
 
@@ -177,4 +190,66 @@ export async function getLatestExpertFlyerSnapshots(
     map.set(row.flight_key, row);
   }
   return map;
+}
+
+export interface EfFlightRow {
+  flight_key: string;
+  airline: string;
+  flight_number: string;
+  origin: string;
+  destination: string;
+  departure_date: string;
+  departure_time: string;
+  arrival_time: string | null;
+  aircraft: string | null;
+  ef_buckets: string | null;
+  updated_at: string;
+}
+
+export async function upsertEfFlights(
+  db: D1Database,
+  flights: Omit<EfFlightRow, "updated_at">[]
+): Promise<void> {
+  await ensureSchema(db);
+  if (flights.length === 0) return;
+  const stmts = flights.map((f) =>
+    db
+      .prepare(
+        `INSERT INTO ef_flights (
+          flight_key, airline, flight_number, origin, destination,
+          departure_date, departure_time, arrival_time, aircraft, ef_buckets, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(flight_key) DO UPDATE SET
+          departure_time = excluded.departure_time,
+          arrival_time = COALESCE(excluded.arrival_time, ef_flights.arrival_time),
+          aircraft = COALESCE(excluded.aircraft, ef_flights.aircraft),
+          ef_buckets = COALESCE(excluded.ef_buckets, ef_flights.ef_buckets),
+          updated_at = datetime('now')`
+      )
+      .bind(
+        f.flight_key,
+        f.airline,
+        f.flight_number,
+        f.origin,
+        f.destination,
+        f.departure_date,
+        f.departure_time,
+        f.arrival_time,
+        f.aircraft,
+        f.ef_buckets
+      )
+  );
+  await db.batch(stmts);
+}
+
+export async function listEfFlights(
+  db: D1Database,
+  date: string
+): Promise<EfFlightRow[]> {
+  await ensureSchema(db);
+  const res = await db
+    .prepare("SELECT * FROM ef_flights WHERE departure_date = ?")
+    .bind(date)
+    .all<EfFlightRow>();
+  return res.results ?? [];
 }

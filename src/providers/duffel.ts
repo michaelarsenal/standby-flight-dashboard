@@ -79,22 +79,27 @@ export async function fetchDuffelCandidates(params: {
       const offerReqJson = (await offerReqRes.json()) as { data?: { offers?: any[] } };
       const offers = offerReqJson.data?.offers ?? [];
 
-      // Deduplicate by operating carrier + flight number
-      const seenFlights = new Map<string, any>();
+      // Deduplicate by operating carrier + departure time, preferring non-codeshare (< 4000) flight numbers
+      const seenFlights = new Map<string, { flightNum: string; numVal: number; offer: any }>();
       for (const offer of offers) {
         const seg = offer?.slices?.[0]?.segments?.[0];
         if (!seg) continue;
         const carrier = (seg.operating_carrier?.iata_code || seg.marketing_carrier?.iata_code || "").toUpperCase();
         if (airlines.length > 0 && !airlines.includes(carrier)) continue;
-        const flightNum = `${carrier}${seg.operating_carrier_flight_number || seg.marketing_carrier_flight_number || ""}`;
-        if (!seenFlights.has(flightNum)) {
-          seenFlights.set(flightNum, offer);
+        const rawDigits = String(seg.operating_carrier_flight_number || seg.marketing_carrier_flight_number || "").replace(/\D/g, "");
+        if (!rawDigits) continue;
+        const numVal = parseInt(rawDigits, 10);
+        const flightNum = `${carrier}${numVal}`;
+        const depKey = `${carrier}-${String(seg.departing_at || "").slice(0, 16)}`;
+        const existing = seenFlights.get(depKey);
+        if (!existing || numVal < existing.numVal) {
+          seenFlights.set(depKey, { flightNum, numVal, offer });
         }
       }
 
       // Fetch seat map for each unique direct flight (capped to 8 per pair)
-      const uniqueOffers = Array.from(seenFlights.entries()).slice(0, 8);
-      for (const [flightNum, offer] of uniqueOffers) {
+      const uniqueOffers = Array.from(seenFlights.values()).slice(0, 8);
+      for (const { flightNum, offer } of uniqueOffers) {
         const seg = offer.slices[0].segments[0];
         const carrier = (seg.operating_carrier?.iata_code || seg.marketing_carrier?.iata_code || "").toUpperCase();
         const cabins = emptyCabins();
