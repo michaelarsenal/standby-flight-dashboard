@@ -403,6 +403,12 @@ export function renderHtml(): string {
         }).join("");
 
         const efTag = c.fareBuckets ? '<span class="pill">EF: ' + c.fareBuckets.raw.slice(0, 32) + (c.fareBuckets.raw.length > 32 ? '…' : '') + '</span>' : '';
+        const dr = c.disruptionRisk;
+        const riskClass = dr && dr.level === "high" ? "score-red" : dr && dr.level === "moderate" ? "score-amber" : "score-green";
+        const riskPill = dr ? '<span class="score-badge ' + riskClass + '" style="margin-left:6px;">RISK: ' + dr.level.toUpperCase() + '</span>' : '';
+        const riskNotes = (dr && dr.signals && dr.signals.length > 0)
+          ? '<div class="subtitle" style="margin-top:6px;"><strong>Predictive Signals:</strong> ' + dr.signals.join(' · ') + '</div>'
+          : '';
 
         return '<div class="flight-card">' +
           '<div class="flight-top">' +
@@ -411,9 +417,10 @@ export function renderHtml(): string {
               '<span class="route-meta">' + c.origin + ' → ' + c.destination + ' · ' + c.departureTime + '–' + c.arrivalTime + ' (' + c.duration + ') · ' + c.aircraft + '</span>' +
               efTag +
             '</div>' +
-            '<span class="score-badge ' + badgeClass(c.readiness) + '">' + badgeText(c.readiness, c.standbyScore) + '</span>' +
+            '<div><span class="score-badge ' + badgeClass(c.readiness) + '">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>' +
           '</div>' +
           '<div class="cabins-grid">' + cabins + '</div>' +
+          riskNotes +
           '<ul class="reasons">' + c.reasons.map(r => '<li>' + r + '</li>').join("") + '</ul>' +
           '<div class="actions-row">' +
             '<input class="ef-input" id="ef-' + idx + '" placeholder="Paste ExpertFlyer / myIDTravel buckets (e.g. F5 J9 W8 Y9 B9...)" value="' + (c.fareBuckets ? c.fareBuckets.raw : '') + '" />' +

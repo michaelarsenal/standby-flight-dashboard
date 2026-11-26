@@ -1,6 +1,7 @@
 import type {
   CabinKey,
   CabinSeatSummary,
+  DisruptionRiskSummary,
   FareBuckets,
   ReadinessLevel,
   RouteDisruption,
@@ -47,16 +48,51 @@ export function parseFareBuckets(
   };
 }
 
+export function computePredictiveDisruptionRisk(params: {
+  disruptions: RouteDisruption[];
+  weatherSignals: string[];
+  weatherRiskPoints: number;
+  hubSignals: string[];
+  hubRiskPoints: number;
+  inboundSignal?: string | null;
+  inboundRiskPoints?: number;
+}): DisruptionRiskSummary {
+  const signals: string[] = [];
+  let score = params.weatherRiskPoints + params.hubRiskPoints + (params.inboundRiskPoints ?? 0);
+
+  signals.push(...params.weatherSignals, ...params.hubSignals);
+  if (params.inboundSignal) signals.push(params.inboundSignal);
+
+  for (const d of params.disruptions) {
+    score += d.impactPenalty;
+    signals.push(`${d.flightNumber} (Day ${d.dayOffset}): ${d.detail}`);
+  }
+
+  score = Math.min(100, Math.round(score));
+  const level: "low" | "moderate" | "high" =
+    score >= 35 ? "high" : score >= 15 ? "moderate" : "low";
+
+  return { level, score, signals };
+}
+
 export function computeStandbyScore(params: {
   cabins: Record<CabinKey, CabinSeatSummary>;
   targetCabin: CabinKey;
   fareBuckets: FareBuckets | null;
   disruptions: RouteDisruption[];
+  predictiveRiskPoints?: number;
   hoursToDeparture?: number | null;
   velocityDropPerHour?: number | null;
 }): { score: number; readiness: ReadinessLevel; reasons: string[] } {
-  const { cabins, targetCabin, fareBuckets, disruptions, hoursToDeparture, velocityDropPerHour } =
-    params;
+  const {
+    cabins,
+    targetCabin,
+    fareBuckets,
+    disruptions,
+    predictiveRiskPoints,
+    hoursToDeparture,
+    velocityDropPerHour,
+  } = params;
 
   const reasons: string[] = [];
   const cabin = cabins[targetCabin];
@@ -131,12 +167,18 @@ export function computeStandbyScore(params: {
     }
   }
 
-  // 4. Day -1 & Day 0 route disruption penalty
+  // 4. Day -3..Day 0 route disruption & predictive weather/hub/inbound penalty
   for (const d of disruptions) {
     score -= d.impactPenalty;
     reasons.push(
-      `${d.dayOffset === -1 ? "Day -1" : "Same-day"} ${d.flightNumber} ${d.type.replace("_", " ")}: ${d.detail}`
+      `${d.dayOffset === 0 ? "Same-day" : `Day ${d.dayOffset}`} ${d.flightNumber} ${d.type.replace("_", " ")}: ${d.detail}`
     );
+  }
+
+  if (predictiveRiskPoints && predictiveRiskPoints > 0) {
+    const penalty = Math.min(20, Math.round(predictiveRiskPoints * 0.45));
+    score -= penalty;
+    reasons.push(`Predictive weather/hub/inbound disruption risk (-${penalty} pts)`);
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));

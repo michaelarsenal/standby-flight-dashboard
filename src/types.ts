@@ -23,10 +23,16 @@ export interface RouteDisruption {
   origin: string;
   destination: string;
   scheduledDeparture: string;
-  dayOffset: -1 | 0;
+  dayOffset: -3 | -2 | -1 | 0;
   type: "cancelled" | "delayed" | "equipment_swap";
   detail: string;
   impactPenalty: number;
+}
+
+export interface DisruptionRiskSummary {
+  level: "low" | "moderate" | "high";
+  score: number;
+  signals: string[];
 }
 
 export interface FlightCandidate {
@@ -44,6 +50,7 @@ export interface FlightCandidate {
   cabins: Record<CabinKey, CabinSeatSummary>;
   fareBuckets: FareBuckets | null;
   disruptions: RouteDisruption[];
+  disruptionRisk?: DisruptionRiskSummary;
   standbyScore: number;
   readiness: ReadinessLevel;
   reasons: string[];

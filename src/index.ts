@@ -10,8 +10,17 @@ import {
 } from "./db.ts";
 import { buildDemoCandidates } from "./providers/demo.ts";
 import { fetchDuffelCandidates } from "./providers/duffel.ts";
-import { fetchFlightAwareDisruptions } from "./providers/flightaware.ts";
-import { computeStandbyScore, parseFareBuckets } from "./scoring.ts";
+import {
+  fetchAirportDelaySignal,
+  fetchFlightAwareDisruptions,
+  fetchInboundAircraftSignal,
+} from "./providers/flightaware.ts";
+import { fetchAirportWeatherRisk } from "./providers/weather.ts";
+import {
+  computePredictiveDisruptionRisk,
+  computeStandbyScore,
+  parseFareBuckets,
+} from "./scoring.ts";
 import type { CabinKey, Env, FlightCandidate, RouteDisruption } from "./types.ts";
 import { MANIFEST_JSON, renderHtml } from "./ui.ts";
 
@@ -65,6 +74,25 @@ async function runFlightSearch(params: {
     }
   }
 
+  // Fetch Open-Meteo predictive weather risk for all queried origins & destinations
+  const weatherByAirport = new Map<string, Awaited<ReturnType<typeof fetchAirportWeatherRisk>>>();
+  const uniqueAirports = Array.from(new Set([...origins, ...destinations]));
+  await Promise.all(
+    uniqueAirports.map(async (code) => {
+      weatherByAirport.set(code, await fetchAirportWeatherRisk(code, date));
+    })
+  );
+
+  // Fetch FlightAware hub delay status if API key is configured
+  const hubDelayByAirport = new Map<string, { riskPoints: number; signal: string | null }>();
+  if (env.FLIGHTAWARE_API_KEY) {
+    await Promise.all(
+      uniqueAirports.map(async (code) => {
+        hubDelayByAirport.set(code, await fetchAirportDelaySignal(env.FLIGHTAWARE_API_KEY!, code));
+      })
+    );
+  }
+
   if (env.DUFFEL_API_TOKEN) {
     const rawCandidates = await fetchDuffelCandidates({
       token: env.DUFFEL_API_TOKEN,
@@ -91,27 +119,60 @@ async function runFlightSearch(params: {
       }
     }
 
-    const candidates: FlightCandidate[] = rawCandidates.map((c) => {
-      const routeDisruptions = allDisruptions.filter(
-        (d) => d.airline === c.airline && d.origin === c.origin && d.destination === c.destination
-      );
-      const hrs = hoursUntilDeparture(c.departureDate, c.departureTime);
-      const { score, readiness, reasons } = computeStandbyScore({
-        cabins: c.cabins,
-        targetCabin,
-        fareBuckets: c.fareBuckets,
-        disruptions: routeDisruptions,
-        hoursToDeparture: hrs,
-      });
-      return {
-        ...c,
-        disruptions: routeDisruptions,
-        standbyScore: score,
-        readiness,
-        reasons,
-        watched: watchedKeys.has(c.flightKey),
-      };
-    });
+    const candidates: FlightCandidate[] = await Promise.all(
+      rawCandidates.map(async (c) => {
+        const routeDisruptions = allDisruptions.filter(
+          (d) => d.airline === c.airline && d.origin === c.origin && d.destination === c.destination
+        );
+        const hrs = hoursUntilDeparture(c.departureDate, c.departureTime);
+
+        const origWx = weatherByAirport.get(c.origin);
+        const destWx = weatherByAirport.get(c.destination);
+        const weatherSignals = [...(origWx?.signals ?? []), ...(destWx?.signals ?? [])];
+        const weatherRiskPoints = (origWx?.riskPoints ?? 0) + (destWx?.riskPoints ?? 0);
+
+        const origHub = hubDelayByAirport.get(c.origin);
+        const destHub = hubDelayByAirport.get(c.destination);
+        const hubSignals = [origHub?.signal, destHub?.signal].filter((s): s is string => Boolean(s));
+        const hubRiskPoints = (origHub?.riskPoints ?? 0) + (destHub?.riskPoints ?? 0);
+
+        let inboundSignal: string | null = null;
+        let inboundRiskPoints = 0;
+        if (env.FLIGHTAWARE_API_KEY && hrs !== null && hrs <= 24 && hrs >= -2) {
+          const inb = await fetchInboundAircraftSignal(env.FLIGHTAWARE_API_KEY, c.flightNumber);
+          inboundSignal = inb.signal;
+          inboundRiskPoints = inb.riskPoints;
+        }
+
+        const disruptionRisk = computePredictiveDisruptionRisk({
+          disruptions: routeDisruptions,
+          weatherSignals,
+          weatherRiskPoints,
+          hubSignals,
+          hubRiskPoints,
+          inboundSignal,
+          inboundRiskPoints,
+        });
+
+        const { score, readiness, reasons } = computeStandbyScore({
+          cabins: c.cabins,
+          targetCabin,
+          fareBuckets: c.fareBuckets,
+          disruptions: routeDisruptions,
+          predictiveRiskPoints: weatherRiskPoints + hubRiskPoints + inboundRiskPoints,
+          hoursToDeparture: hrs,
+        });
+        return {
+          ...c,
+          disruptions: routeDisruptions,
+          disruptionRisk,
+          standbyScore: score,
+          readiness,
+          reasons,
+          watched: watchedKeys.has(c.flightKey),
+        };
+      })
+    );
 
     candidates.sort((a, b) => b.standbyScore - a.standbyScore);
     return {
@@ -126,15 +187,30 @@ async function runFlightSearch(params: {
   const demo = buildDemoCandidates({ origins, destinations, date, airlines });
   const candidates: FlightCandidate[] = demo.candidates.map((c) => {
     const hrs = hoursUntilDeparture(c.departureDate, c.departureTime);
+    const origWx = weatherByAirport.get(c.origin);
+    const destWx = weatherByAirport.get(c.destination);
+    const weatherSignals = [...(origWx?.signals ?? []), ...(destWx?.signals ?? [])];
+    const weatherRiskPoints = (origWx?.riskPoints ?? 0) + (destWx?.riskPoints ?? 0);
+
+    const disruptionRisk = computePredictiveDisruptionRisk({
+      disruptions: c.disruptions,
+      weatherSignals,
+      weatherRiskPoints,
+      hubSignals: [],
+      hubRiskPoints: 0,
+    });
+
     const { score, readiness, reasons } = computeStandbyScore({
       cabins: c.cabins,
       targetCabin,
       fareBuckets: c.fareBuckets,
       disruptions: c.disruptions,
+      predictiveRiskPoints: weatherRiskPoints,
       hoursToDeparture: hrs,
     });
     return {
       ...c,
+      disruptionRisk,
       standbyScore: score,
       readiness,
       reasons,

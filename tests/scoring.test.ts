@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { expandAirportInput } from "../src/airports.ts";
-import { computeStandbyScore, parseFareBuckets } from "../src/scoring.ts";
+import {
+  computePredictiveDisruptionRisk,
+  computeStandbyScore,
+  parseFareBuckets,
+} from "../src/scoring.ts";
 
 test("expandAirportInput expands WAS and LON co-terminals", () => {
   assert.deepEqual(expandAirportInput("WAS"), ["IAD", "BWI", "DCA"]);
@@ -52,4 +56,19 @@ test("computeStandbyScore penalizes Day -1 route cancellations and tight seats",
 
   assert.equal(res.readiness, "red");
   assert.ok(res.score < 45);
+});
+
+test("computePredictiveDisruptionRisk flags high risk from fog + inbound delay", () => {
+  const risk = computePredictiveDisruptionRisk({
+    disruptions: [],
+    weatherSignals: ["LHR: Fog / low visibility forecast (min 400m)"],
+    weatherRiskPoints: 22,
+    hubSignals: [],
+    hubRiskPoints: 0,
+    inboundSignal: "Inbound aircraft (BA217) running 95m late",
+    inboundRiskPoints: 20,
+  });
+  assert.equal(risk.level, "high");
+  assert.equal(risk.score, 42);
+  assert.equal(risk.signals.length, 2);
 });
