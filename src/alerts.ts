@@ -10,7 +10,7 @@ export async function sendStandbyAlert(
     return false;
   }
 
-  const from = env.ALERT_EMAIL_FROM || "Standby Monitor <alerts@resend.dev>";
+  const from = env.ALERT_EMAIL_FROM || "Standby Monitor <onboarding@resend.dev>";
   const badge = flight.readiness.toUpperCase();
   const subject = `[Standby ${badge}] ${flight.flightNumber} ${flight.origin}->${flight.destination} (${flight.departureDate}) - Score ${flight.standbyScore}/100`;
 
