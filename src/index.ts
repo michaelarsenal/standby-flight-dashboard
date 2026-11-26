@@ -162,12 +162,20 @@ async function runFlightSearch(params: {
     });
 
     // Include any ExpertFlyer flights on queried route/airlines that Duffel omitted
-    for (const ef of efFlights) {
+    const efRouteFlights = efFlights.filter(
+      (ef) =>
+        origins.includes(ef.origin) &&
+        destinations.includes(ef.destination) &&
+        (airlines.length === 0 || airlines.includes(ef.airline))
+    );
+    const mergedClean = efRouteFlights.length > 0
+      ? mergedRaw.filter((c) => matchedEfKeys.has(c.flightKey))
+      : mergedRaw;
+
+    for (const ef of efRouteFlights) {
       if (matchedEfKeys.has(ef.flight_key)) continue;
-      if (!origins.includes(ef.origin) || !destinations.includes(ef.destination)) continue;
-      if (airlines.length > 0 && !airlines.includes(ef.airline)) continue;
       const empty = { available: 0, occupied: 0, blocked: 0, total: 0 };
-      mergedRaw.push({
+      mergedClean.push({
         flightKey: ef.flight_key,
         airline: ef.airline,
         flightNumber: ef.flight_number,
@@ -202,7 +210,7 @@ async function runFlightSearch(params: {
     }
 
     const candidates: FlightCandidate[] = await Promise.all(
-      mergedRaw.map(async (c) => {
+      mergedClean.map(async (c) => {
         const routeDisruptions = allDisruptions.filter(
           (d) => d.airline === c.airline && d.origin === c.origin && d.destination === c.destination
         );
