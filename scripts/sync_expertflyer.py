@@ -455,6 +455,14 @@ def main() -> int:
     queries = []
     for w in watches:
         due, hrs, reason = is_watch_due(w)
+        if not due and hrs is not None and hrs >= -1.0 and hrs <= 336.0:
+            try:
+                hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
+                snaps = hist.get("snapshots") or []
+                if not any(str(s.get("raw_note") or "").startswith("ExpertFlyer") for s in snaps):
+                    due, reason = True, "initial ExpertFlyer sync"
+            except Exception:
+                pass
         print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
         if not due:
             continue
