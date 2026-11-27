@@ -548,7 +548,7 @@ export function renderHtml(): string {
         document.getElementById("historyBody").innerHTML = '<p class="subtitle">No snapshots recorded yet. The Cron poller records seat counts every 30 minutes.</p>';
         return;
       }
-      const fmtCab = (op, occ, blk) => blk > 0 && op === 0 ? `${op} <span style="opacity:.7">(+${blk}b, ${occ}occ)</span>` : `${op} <span style="opacity:.7">(${occ}occ)</span>`;
+      const fmtCab = (op, occ, blk) => (blk > 0 && op === 0) ? (op + ' <span style="opacity:.7">(+' + blk + 'b, ' + occ + 'occ)</span>') : (op + ' <span style="opacity:.7">(' + occ + 'occ)</span>');
       document.getElementById("historyBody").innerHTML = '<table><thead><tr><th>Time (UTC)</th><th>T-hrs</th><th>F</th><th>J</th><th>W</th><th>Y</th><th>Score</th></tr></thead><tbody>' +
         snaps.slice().reverse().map(s => '<tr>' +
           '<td>' + s.captured_at + '</td>' +
