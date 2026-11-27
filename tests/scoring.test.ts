@@ -26,6 +26,19 @@ test("parseFareBuckets parses ExpertFlyer availability string", () => {
   assert.equal(parsed.classes["I"], 0);
 });
 
+test("parseFareBuckets treats R as Economy (not Business) for Virgin Atlantic (VS)", () => {
+  const parsed = parseFareBuckets(
+    "J0 C0 D0 I0 Z0 W4 S4 H4 K0 Y9 B9 R9 L9 U9 M9 E9 Q9 X0 N0 O0 V1 T9",
+    "VS"
+  );
+  assert.ok(parsed);
+  if (!parsed) throw new Error("Expected parsed VS fare buckets");
+  assert.equal(parsed.firstMax, null);
+  assert.equal(parsed.businessMax, 0);
+  assert.equal(parsed.premEconMax, 4);
+  assert.equal(parsed.economyMax, 9);
+});
+
 test("computeStandbyScore penalizes Day -1 route cancellations and tight seats", () => {
   const cabins = {
     first: { available: 1, occupied: 6, blocked: 1, total: 8 },

@@ -33,6 +33,8 @@ export function parseFareBuckets(
   };
 
   const carrier = (airline || "").toUpperCase();
+  const businessLetters =
+    carrier === "VS" ? ["J", "C", "D", "I", "Z"] : ["J", "C", "D", "R", "I", "Z"];
   const premEconLetters =
     carrier === "VS" ? ["W", "S", "H", "K"] : ["W", "E", "T", "P"];
   const economyLetters =
@@ -43,7 +45,7 @@ export function parseFareBuckets(
   return {
     raw: rawInput.trim(),
     firstMax: maxOf(["F", "A"]),
-    businessMax: maxOf(["J", "C", "D", "R", "I", "Z"]),
+    businessMax: maxOf(businessLetters),
     premEconMax: maxOf(premEconLetters),
     economyMax: maxOf(economyLetters),
     classes,
