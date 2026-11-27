@@ -485,7 +485,7 @@ export function renderHtml(): string {
         ].map(([key, label]) => {
           const s = c.cabins[key];
           if (!s || s.total === 0) {
-            return '<div class="cabin-box"><div class="cabin-name"><span>' + label + '</span><span>—</span></div><div class="cabin-nums">Not fitted</div></div>';
+            return '';
           }
           totCap += s.total;
           totOcc += s.occupied;
