@@ -433,7 +433,7 @@ export async function fetchArrivalCongestion(
       fetch(`${AEROAPI_BASE}/airports/${encodeURIComponent(code)}/delays`, {
         headers: { "x-apikey": apiKey, Accept: "application/json" },
       }),
-      fetchAirportWeatherRisk(code),
+      fetchAirportWeatherRisk(code, new Date().toISOString().slice(0, 10)),
     ]);
 
     let avgDelayMins = 0;

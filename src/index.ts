@@ -522,7 +522,7 @@ export default {
               : null;
             const allCabs = [cabins.first, cabins.business, cabins.prem_econ, cabins.economy].filter((c) => c.total > 0);
             const flightTotalSummary = allCabs.length > 0
-              ? allCabs.reduce(
+              ? allCabs.reduce<{ total: number; open: number; occupied: number; available: number; blocked: number }>(
                   (acc, c) => ({
                     total: acc.total + c.total,
                     open: acc.open + c.available + c.blocked,
