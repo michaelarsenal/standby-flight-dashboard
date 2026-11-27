@@ -2,6 +2,7 @@ import { expandAirportInput } from "./airports.ts";
 import { sendStandbyAlert } from "./alerts.ts";
 import {
   deleteWatch,
+  getEfSeatmap,
   getLatestExpertFlyerSnapshots,
   getSnapshots,
   listEfFlights,
@@ -9,6 +10,7 @@ import {
   recordSnapshot,
   updateWatchStatus,
   upsertEfFlights,
+  upsertEfSeatmap,
   upsertWatch,
   type EfFlightRow,
 } from "./db.ts";
@@ -492,6 +494,7 @@ export default {
         efBuckets?: string;
         status?: "ok" | "unavailable";
         cabins?: Record<CabinKey, CabinSeatSummary>;
+        seatmap?: unknown;
         note?: string;
       };
       if (!body.flightKey) {
@@ -553,6 +556,9 @@ export default {
 
       const note = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
       await recordSnapshot(env.DB, candidate, hrs, note);
+      if (body.seatmap) {
+        await upsertEfSeatmap(env.DB, body.flightKey, candidate.aircraft, body.seatmap);
+      }
 
       if (w) {
         if (w.last_status && w.last_status !== rescored.readiness) {
@@ -584,6 +590,19 @@ export default {
       const flights = Array.isArray(body.flights) ? body.flights : [];
       await upsertEfFlights(env.DB, flights);
       return jsonResponse({ ok: true, count: flights.length });
+    }
+
+    if (path.startsWith("/api/seatmap/") && request.method === "GET") {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const flightKey = decodeURIComponent(path.slice("/api/seatmap/".length));
+      const row = await getEfSeatmap(env.DB, flightKey);
+      if (!row) return jsonResponse({ error: "Seat map not cached yet for this flight" }, 404);
+      return jsonResponse({
+        flightKey: row.flight_key,
+        aircraft: row.aircraft,
+        captured_at: row.captured_at,
+        seatmap: JSON.parse(row.seatmap_json),
+      });
     }
 
     return jsonResponse({ error: "Not found" }, 404);

@@ -245,6 +245,19 @@ export function renderHtml(): string {
     table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
     th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 600; }
+    .sm-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.78rem; margin: 10px 0 14px; color: var(--muted); }
+    .sm-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .sm-cabin { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: rgba(2,6,23,0.45); }
+    .sm-cabin-title { font-weight: 700; font-size: 0.88rem; margin-bottom: 8px; display: flex; justify-content: space-between; color: var(--text); }
+    .sm-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 0.72rem; }
+    .sm-rownum { width: 24px; text-align: right; color: var(--muted); font-family: monospace; flex-shrink: 0; margin-right: 4px; }
+    .sm-seat { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.68rem; border: 1px solid transparent; flex-shrink: 0; cursor: default; }
+    .sm-a { background: rgba(34,197,94,0.22); border-color: rgba(34,197,94,0.65); color: #86efac; }
+    .sm-p { background: rgba(245,158,11,0.22); border-color: rgba(245,158,11,0.7); color: #fcd34d; }
+    .sm-o { background: rgba(59,130,246,0.25); border-color: rgba(59,130,246,0.55); color: #93c5fd; }
+    .sm-b { background: rgba(100,116,139,0.22); border-color: rgba(100,116,139,0.5); color: #94a3b8; }
+    .sm-aisle { width: 14px; height: 24px; display: inline-block; flex-shrink: 0; }
+    .sm-exit { font-size: 0.65rem; color: #f87171; font-weight: 700; padding: 0 3px; }
   </style>
 </head>
 <body>
@@ -337,6 +350,22 @@ export function renderHtml(): string {
         <button class="btn-ghost" onclick="closeHistory()">Close</button>
       </div>
       <div id="historyBody"></div>
+    </div>
+  </div>
+
+  <div id="seatmapModal" class="modal-backdrop">
+    <div class="modal" style="max-width:760px">
+      <div class="section-title">
+        <span id="seatmapTitle">Seat Map</span>
+        <button class="btn-ghost" onclick="closeSeatmap()">Close</button>
+      </div>
+      <div class="sm-legend">
+        <span><i class="sm-seat sm-a">A</i> Available</span>
+        <span><i class="sm-seat sm-p">$</i> Paid / Preferred</span>
+        <span><i class="sm-seat sm-o">×</i> Occupied</span>
+        <span><i class="sm-seat sm-b">X</i> Blocked</span>
+      </div>
+      <div id="seatmapBody"></div>
     </div>
   </div>
 
@@ -447,6 +476,7 @@ export function renderHtml(): string {
           '<div class="actions-row">' +
             '<input class="ef-input" id="ef-' + idx + '" placeholder="Paste ExpertFlyer / myIDTravel buckets (e.g. F5 J9 W8 Y9 B9...)" value="' + (c.fareBuckets ? c.fareBuckets.raw : '') + '" />' +
             '<button class="btn-ghost" onclick="recalcWithEf(' + idx + ')">Apply EF Buckets</button>' +
+            '<button class="btn-ghost" onclick="openSeatmap(\\'' + c.flightKey + '\\', \\'' + c.flightNumber + '\\')">Seat Map</button>' +
             '<button class="btn-ghost btn-watch ' + (c.watched ? 'active' : '') + '" onclick="toggleWatch(' + idx + ')">' + (c.watched ? 'Watching ✓' : '+ Watch Flight') + '</button>' +
           '</div>' +
         '</div>';
@@ -527,7 +557,8 @@ export function renderHtml(): string {
           '<td>' + w.departure_date + ' ' + (w.departure_time || '') + '</td>' +
           '<td>' + w.target_cabin + '</td>' +
           '<td><span class="score-badge ' + badgeClass(w.last_status) + '">' + (w.last_status || 'pending').toUpperCase() + ' (' + (w.last_score ?? '?') + ')</span></td>' +
-          '<td><button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +
+          '<td><button class="btn-ghost" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button> ' +
+          '<button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +
           '<button class="btn-ghost" onclick="removeWatch(\\'' + w.flight_key + '\\')">Remove</button></td>' +
         '</tr>').join("") +
       '</tbody></table>';
@@ -564,6 +595,57 @@ export function renderHtml(): string {
 
     function closeHistory() {
       document.getElementById("historyModal").classList.remove("open");
+    }
+
+    async function openSeatmap(flightKey, flightNum) {
+      document.getElementById("seatmapTitle").textContent = flightNum + " — Loading Seat Map...";
+      document.getElementById("seatmapBody").innerHTML = '<p class="subtitle">Loading cached ExpertFlyer seat map...</p>';
+      document.getElementById("seatmapModal").classList.add("open");
+      const res = await fetch("/api/seatmap/" + encodeURIComponent(flightKey));
+      const data = await res.json();
+      if (!res.ok || !data.seatmap || !data.seatmap.sections) {
+        document.getElementById("seatmapTitle").textContent = flightNum + " — Seat Map";
+        document.getElementById("seatmapBody").innerHTML = '<p class="subtitle">' + (data.error || "No graphical seat map cached yet. It will populate on the next 15-minute ExpertFlyer sync.") + '</p>';
+        return;
+      }
+      document.getElementById("seatmapTitle").textContent = flightNum + (data.aircraft ? " (" + data.aircraft + ")" : "") + " — Captured " + (data.captured_at || "") + " UTC";
+      const cabinNames = { first: "First (F)", business: "Business / Club (J)", prem_econ: "Premium Economy (W)", economy: "Economy (Y)" };
+      document.getElementById("seatmapBody").innerHTML = data.seatmap.sections.map(function(sec) {
+        const rowsHtml = (sec.rows || []).map(function(row) {
+          const cells = (row.seats || []).map(function(cell) {
+            if (cell.t !== "s") {
+              return '<span class="sm-aisle"></span>';
+            }
+            const statusName = cell.s === "a" ? (cell.p ? "Available (Paid/Pref)" : "Available") : (cell.s === "o" ? "Occupied" : "Blocked");
+            const cls = cell.s === "a" ? (cell.p ? "sm-seat sm-p" : "sm-seat sm-a") : (cell.s === "o" ? "sm-seat sm-o" : "sm-seat sm-b");
+            const txt = cell.s === "o" ? "×" : (cell.s === "b" ? "X" : (cell.l || ""));
+            return '<span class="' + cls + '" title="Seat ' + row.n + (cell.l || "") + ' — ' + statusName + '">' + txt + '</span>';
+          }).join("");
+          const exL = row.el ? '<span class="sm-exit">EXIT</span>' : '';
+          const exR = row.er ? '<span class="sm-exit">EXIT</span>' : '';
+          const wingTag = row.w ? '<span style="font-size:0.65rem;color:#38bdf8;margin-left:4px;">W</span>' : '';
+          return '<div class="sm-row"><span class="sm-rownum">' + row.n + '</span>' + exL + cells + exR + wingTag + '</div>';
+        }).join("");
+        const counts = (sec.rows || []).reduce(function(acc, r) {
+          (r.seats || []).forEach(function(c) {
+            if (c.t !== "s") return;
+            acc.t++;
+            if (c.s === "a") acc.a++;
+            else if (c.s === "o") acc.o++;
+            else if (c.s === "b") acc.b++;
+          });
+          return acc;
+        }, { a: 0, o: 0, b: 0, t: 0 });
+        return '<div class="sm-cabin">' +
+          '<div class="sm-cabin-title"><span>' + (cabinNames[sec.cabin] || sec.code) + '</span>' +
+          '<span style="font-size:0.78rem;color:var(--muted)">' + counts.a + ' open · ' + counts.o + ' occ · ' + counts.b + ' blk (' + counts.t + ' total)</span></div>' +
+          '<div style="overflow-x:auto">' + rowsHtml + '</div>' +
+        '</div>';
+      }).join("");
+    }
+
+    function closeSeatmap() {
+      document.getElementById("seatmapModal").classList.remove("open");
     }
 
     document.getElementById("searchForm").addEventListener("submit", runSearch);

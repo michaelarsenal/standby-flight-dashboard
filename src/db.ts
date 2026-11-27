@@ -54,6 +54,12 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       ef_buckets TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS ef_seatmaps (
+      flight_key TEXT PRIMARY KEY,
+      aircraft TEXT,
+      seatmap_json TEXT NOT NULL,
+      captured_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
   ]);
 }
 
@@ -252,4 +258,36 @@ export async function listEfFlights(
     .bind(date)
     .all<EfFlightRow>();
   return res.results ?? [];
+}
+
+export async function upsertEfSeatmap(
+  db: D1Database,
+  flightKey: string,
+  aircraft: string,
+  seatmap: unknown
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare(
+      `INSERT INTO ef_seatmaps (flight_key, aircraft, seatmap_json, captured_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(flight_key) DO UPDATE SET
+         aircraft = COALESCE(NULLIF(excluded.aircraft, ''), ef_seatmaps.aircraft),
+         seatmap_json = excluded.seatmap_json,
+         captured_at = datetime('now')`
+    )
+    .bind(flightKey, aircraft, JSON.stringify(seatmap))
+    .run();
+}
+
+export async function getEfSeatmap(
+  db: D1Database,
+  flightKey: string
+): Promise<{ flight_key: string; aircraft: string | null; seatmap_json: string; captured_at: string } | null> {
+  await ensureSchema(db);
+  const res = await db
+    .prepare("SELECT * FROM ef_seatmaps WHERE flight_key = ?")
+    .bind(flightKey)
+    .first<{ flight_key: string; aircraft: string | null; seatmap_json: string; captured_at: string }>();
+  return res ?? null;
 }

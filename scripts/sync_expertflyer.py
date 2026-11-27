@@ -102,30 +102,54 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
         "economy": {"available": 0, "occupied": 0, "blocked": 0, "total": 0},
     }
 
+    compact_sections: list[dict[str, Any]] = []
     for sec in sections:
         code = str(sec.get("cabinCode") or sec.get("displayCabinCode") or "").upper()
         key = CABIN_MAP.get(code)
         if not key:
             continue
+        c_rows: list[dict[str, Any]] = []
         for row in sec.get("rows") or []:
+            c_seats: list[dict[str, Any]] = []
             for s in row.get("seats") or []:
-                if s.get("type") != "seat":
-                    continue
-                cabins[key]["total"] += 1
-                st = str(s.get("status") or "").lower()
-                if st == "available":
-                    cabins[key]["available"] += 1
-                elif st == "occupied":
-                    cabins[key]["occupied"] += 1
-                elif st == "blocked":
-                    cabins[key]["blocked"] += 1
+                stype = str(s.get("type") or "")
+                if stype == "seat":
+                    cabins[key]["total"] += 1
+                    st = str(s.get("status") or "").lower()
+                    if st == "available":
+                        cabins[key]["available"] += 1
+                    elif st == "occupied":
+                        cabins[key]["occupied"] += 1
+                    elif st == "blocked":
+                        cabins[key]["blocked"] += 1
+                    c_seats.append({
+                        "t": "s",
+                        "l": str(s.get("label") or ""),
+                        "s": "a" if st == "available" else ("o" if st == "occupied" else ("b" if st == "blocked" else "?")),
+                        "p": 1 if (s.get("isChargeable") or s.get("isPaidPremium")) else 0,
+                    })
+                else:
+                    c_seats.append({"t": stype[:1] or "e"})
+            c_rows.append({
+                "n": row.get("rowNumber"),
+                "el": bool(row.get("exitLeft")),
+                "er": bool(row.get("exitRight")),
+                "w": bool(row.get("wing")),
+                "seats": c_seats,
+            })
+        compact_sections.append({
+            "cabin": key,
+            "code": code,
+            "cols": sec.get("columns") or [],
+            "rows": c_rows,
+        })
 
     aircraft = ""
     info = obj["seatMap"].get("info") or {}
     if isinstance(info.get("aircraft"), dict):
         aircraft = str(info["aircraft"].get("type") or info["aircraft"].get("equipmentCode") or "")
 
-    return {"cabins": cabins, "aircraft": aircraft}
+    return {"cabins": cabins, "aircraft": aircraft, "seatmap": {"sections": compact_sections}}
 
 
 def fetch_seatmaps(
@@ -678,6 +702,7 @@ def main() -> int:
                 "status": "ok",
                 "aircraft": parsed["aircraft"],
                 "cabins": parsed["cabins"],
+                "seatmap": parsed.get("seatmap"),
                 "note": f"ExpertFlyer seat map ({q['reason']})",
             }
         resp = http_json(f"{args.worker_url.rstrip('/')}/api/expertflyer/ingest", payload)
