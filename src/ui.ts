@@ -401,8 +401,11 @@ export function renderHtml(): string {
 
   <script>
     const dateInput = document.getElementById("date");
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-    dateInput.value = tomorrow;
+    const todayLocal = new Date();
+    const yyyy = todayLocal.getFullYear();
+    const mm = String(todayLocal.getMonth() + 1).padStart(2, "0");
+    const dd = String(todayLocal.getDate()).padStart(2, "0");
+    dateInput.value = yyyy + "-" + mm + "-" + dd;
 
     let latestCandidates = [];
 
@@ -492,15 +495,17 @@ export function renderHtml(): string {
           totAvail += s.available;
           const openTotal = s.available + s.blocked;
           const occPct = s.total > 0 ? Math.round((s.occupied / s.total) * 100) : 0;
+          const fullColor = occPct >= 88 ? '#f87171' : occPct >= 70 ? '#fbbf24' : '#4ade80';
+          const barColor = occPct >= 88 ? '#ef4444' : occPct >= 70 ? '#f59e0b' : '#22c55e';
           const bTag = bucketMap[key] ? ' <span class="pill" style="padding:1px 6px;font-size:10px">' + bucketMap[key] + '</span>' : '';
           return '<div class="cabin-box ' + (key === targetCabin ? 'target' : '') + '">' +
-            '<div class="cabin-name"><span>' + label + bTag + '</span><span style="font-size:11px;color:#94a3b8">Cap ' + s.total + '</span></div>' +
-            '<div style="display:flex;justify-content:space-between;align-items:baseline;margin:4px 0 3px;">' +
-              '<span style="font-size:13px;font-weight:700;color:#e2e8f0">' + s.occupied + ' occ</span>' +
-              '<span style="font-size:13px;font-weight:700;color:' + (openTotal >= 15 ? '#4ade80' : openTotal >= 5 ? '#fbbf24' : '#f87171') + '">' + openTotal + ' open <span style="font-weight:500;font-size:11px;color:#94a3b8">(' + s.available + ' avail)</span></span>' +
+            '<div class="cabin-name"><span>' + label + bTag + '</span><span style="font-size:11px;color:#94a3b8">' + occPct + '% full</span></div>' +
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;margin:4px 0 4px;">' +
+              '<span style="font-size:19px;font-weight:800;letter-spacing:-0.02em;color:' + fullColor + '">' + s.total + ' / ' + openTotal + '</span>' +
+              '<span style="font-size:11px;color:#94a3b8">Cap / Open (' + s.available + ' avail)</span>' +
             '</div>' +
             '<div style="height:4px;background:rgba(148,163,184,0.18);border-radius:999px;overflow:hidden;margin-bottom:5px;">' +
-              '<div style="height:100%;width:' + occPct + '%;background:' + (occPct >= 88 ? '#ef4444' : occPct >= 70 ? '#f59e0b' : '#22c55e') + '"></div>' +
+              '<div style="height:100%;width:' + occPct + '%;background:' + barColor + '"></div>' +
             '</div>' +
             '<div class="cabin-nums" style="font-size:11px">Occ ' + s.occupied + ' · Blk ' + s.blocked + ' · Avail ' + s.available + '</div>' +
           '</div>';
@@ -508,10 +513,11 @@ export function renderHtml(): string {
 
         const totOpen = totBlk + totAvail;
         const totPct = totCap > 0 ? Math.round((totOcc / totCap) * 100) : 0;
+        const totColor = totPct >= 88 ? '#f87171' : totPct >= 70 ? '#fbbf24' : '#4ade80';
         const flightTotalsPill = totCap > 0
-          ? '<div style="display:flex;align-items:center;gap:10px;padding:4px 10px;border-radius:8px;background:rgba(15,23,42,0.65);border:1px solid var(--border);font-size:12px;">' +
-              '<span><strong>' + totOcc + ' / ' + totCap + '</strong> occ (' + totPct + '%)</span>' +
-              '<span style="color:' + (totOpen >= 35 ? '#4ade80' : totOpen >= 15 ? '#fbbf24' : '#f87171') + ';font-weight:700">' + totOpen + ' open <span style="color:#94a3b8;font-weight:400">(' + totAvail + ' avail · ' + totBlk + ' blk)</span></span>' +
+          ? '<div style="display:flex;align-items:center;gap:10px;padding:5px 12px;border-radius:8px;background:rgba(15,23,42,0.7);border:1px solid var(--border);">' +
+              '<span style="font-size:17px;font-weight:800;letter-spacing:-0.02em;color:' + totColor + '">' + totCap + ' / ' + totOpen + '</span>' +
+              '<span style="font-size:11px;color:#94a3b8">Cap / Open · ' + totPct + '% full (' + totOcc + ' occ · ' + totAvail + ' avail · ' + totBlk + ' blk)</span>' +
             '</div>'
           : '';
 

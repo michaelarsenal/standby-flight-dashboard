@@ -283,7 +283,7 @@ async function runFlightSearch(params: {
       })
     );
 
-    candidates.sort((a, b) => b.standbyScore - a.standbyScore);
+    candidates.sort((a, b) => (a.departureTime || "").localeCompare(b.departureTime || ""));
     return {
       mode: "live",
       expandedOrigins: origins,
@@ -327,7 +327,7 @@ async function runFlightSearch(params: {
     };
   });
 
-  candidates.sort((a, b) => b.standbyScore - a.standbyScore);
+  candidates.sort((a, b) => (a.departureTime || "").localeCompare(b.departureTime || ""));
   return {
     mode: "demo",
     expandedOrigins: origins,
