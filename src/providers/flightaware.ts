@@ -262,6 +262,8 @@ export async function fetchInboundDetails(
         : "On time — no outbound impact";
     }
 
+    const adsbLive = stage === "taxiing" || stage === "enroute" || stage === "landed" || Boolean(inbound.actual_out || inbound.actual_off);
+
     return {
       inboundFlight,
       inboundIdent,
@@ -270,6 +272,7 @@ export async function fetchInboundDetails(
       registration,
       status,
       stage,
+      adsbLive,
       departInMins,
       taxiMins,
       surfaceCongestion,

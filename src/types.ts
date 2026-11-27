@@ -103,6 +103,7 @@ export interface InboundFlightInfo {
   registration: string;
   status: string;
   stage: InboundStage;
+  adsbLive?: boolean;
   departInMins: number | null;
   taxiMins?: number | null;
   surfaceCongestion?: SurfaceCongestion | null;

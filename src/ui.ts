@@ -781,7 +781,12 @@ export function renderHtml(): string {
           : '';
         var links = '';
         if (inb.flightRadarUrl) {
-          links += '<a href="' + inb.flightRadarUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px">FR24 ↗</a>';
+          if (inb.adsbLive) {
+            links += '<a href="' + inb.flightRadarUrl + '" target="_blank" rel="noopener noreferrer" title="ADS-B live — open FlightRadar24 live tracker" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px"><span style="color:#4ade80">●</span> FR24 Live ↗</a>';
+          } else {
+            var fr24SchedUrl = 'https://www.flightradar24.com/data/flights/' + encodeURIComponent(String(inb.inboundFlight || '').toLowerCase());
+            links += '<a href="' + fr24SchedUrl + '" target="_blank" rel="noopener noreferrer" title="ADS-B not yet live — opens FR24 flight schedule/history" style="font-size:11px;color:#64748b;text-decoration:none;margin-right:8px">○ FR24 (ADS-B offline) ↗</a>';
+          }
         }
         if (inb.flightAwareUrl) {
           links += '<a href="' + inb.flightAwareUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FA ↗</a>';
