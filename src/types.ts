@@ -76,7 +76,7 @@ export interface SearchQuery {
   targetCabin: CabinKey;
 }
 
-export type InboundStage = "scheduled" | "taxiing" | "enroute" | "landed" | "cancelled";
+export type InboundStage = "scheduled" | "taxiing" | "enroute" | "landed" | "parked" | "diverted" | "cancelled";
 
 export interface AlertStages {
   etd: boolean;
@@ -84,6 +84,7 @@ export interface AlertStages {
   enroute: boolean;
   landed: boolean;
   disruption: boolean;
+  diversion: boolean;
 }
 
 export interface SurfaceCongestion {
@@ -92,7 +93,20 @@ export interface SurfaceCongestion {
   activeDepartures: number;
   avgDelayMins: number;
   estimatedTaxiMins: number;
+  weatherSummary?: string;
   summary: string;
+}
+
+export interface OutboundFlightInfo {
+  flightNumber: string;
+  gate: string;
+  terminal: string;
+  status: string;
+  scheduledOut: string;
+  estimatedOut: string;
+  delayMins: number;
+  cancelled: boolean;
+  diverted: boolean;
 }
 
 export interface InboundFlightInfo {
@@ -105,8 +119,10 @@ export interface InboundFlightInfo {
   stage: InboundStage;
   adsbLive?: boolean;
   departInMins: number | null;
+  arriveInMins?: number | null;
   taxiMins?: number | null;
   surfaceCongestion?: SurfaceCongestion | null;
+  arrivalCongestion?: SurfaceCongestion | null;
   scheduledDeparture?: string;
   estimatedDeparture?: string;
   hasDeparted?: boolean;
@@ -129,6 +145,14 @@ export interface SeatMonitorStatus {
   rowOpenCount: number;
 }
 
+export interface WatchLoadSummary {
+  total: number;
+  open: number;
+  occupied: number;
+  available: number;
+  blocked: number;
+}
+
 export interface WatchedFlight {
   id: number;
   flight_key: string;
@@ -145,13 +169,20 @@ export interface WatchedFlight {
   last_score: number | null;
   alert_stages?: string | null;
   last_inbound_stage?: string | null;
+  last_inbound_milestones?: string | null;
+  last_outbound_state?: string | null;
   assigned_seat?: string | null;
   last_seat_state?: string | null;
+  archived?: number;
   created_at: string;
   updated_at: string;
   inbound?: InboundFlightInfo | null;
+  outbound?: OutboundFlightInfo | null;
   alertStages?: AlertStages;
   seatMonitor?: SeatMonitorStatus | null;
+  targetCabinSummary?: WatchLoadSummary | null;
+  flightTotalSummary?: WatchLoadSummary | null;
+  lastSeatmapAt?: string | null;
 }
 
 export interface SeatSnapshot {
@@ -171,6 +202,8 @@ export interface SeatSnapshot {
   economy_open: number;
   economy_occupied: number;
   economy_blocked: number;
+  empty_rows_total?: number | null;
+  adjacent_spare?: number | null;
   disruption_count: number;
   score: number;
   status: ReadinessLevel;

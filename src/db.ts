@@ -68,8 +68,13 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   for (const col of [
     "ALTER TABLE watches ADD COLUMN alert_stages TEXT",
     "ALTER TABLE watches ADD COLUMN last_inbound_stage TEXT",
+    "ALTER TABLE watches ADD COLUMN last_inbound_milestones TEXT",
+    "ALTER TABLE watches ADD COLUMN last_outbound_state TEXT",
     "ALTER TABLE watches ADD COLUMN assigned_seat TEXT",
     "ALTER TABLE watches ADD COLUMN last_seat_state TEXT",
+    "ALTER TABLE watches ADD COLUMN archived INTEGER DEFAULT 0",
+    "ALTER TABLE snapshots ADD COLUMN empty_rows_total INTEGER",
+    "ALTER TABLE snapshots ADD COLUMN adjacent_spare INTEGER",
   ]) {
     try {
       await db.prepare(col).run();
@@ -85,6 +90,7 @@ export const DEFAULT_ALERT_STAGES: AlertStages = {
   enroute: true,
   landed: true,
   disruption: true,
+  diversion: true,
 };
 
 export function parseAlertStages(raw?: string | null): AlertStages {
@@ -97,6 +103,7 @@ export function parseAlertStages(raw?: string | null): AlertStages {
       enroute: parsed.enroute !== false,
       landed: parsed.landed !== false,
       disruption: parsed.disruption !== false,
+      diversion: parsed.diversion !== false,
     };
   } catch {
     return { ...DEFAULT_ALERT_STAGES };
@@ -217,6 +224,38 @@ export async function updateWatchSeatState(
     .run();
 }
 
+export async function updateWatchMilestones(
+  db: D1Database,
+  flightKey: string,
+  milestonesJson: string
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET last_inbound_milestones = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(milestonesJson, flightKey)
+    .run();
+}
+
+export async function updateWatchOutboundState(
+  db: D1Database,
+  flightKey: string,
+  outboundStateJson: string
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET last_outbound_state = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(outboundStateJson, flightKey)
+    .run();
+}
+
+export async function archiveOldWatches(db: D1Database, cutoffIsoDate: string): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET archived = 1 WHERE departure_date < ? AND COALESCE(archived, 0) = 0")
+    .bind(cutoffIsoDate)
+    .run();
+}
+
 export async function getSetting(db: D1Database, key: string): Promise<string | null> {
   await ensureSchema(db);
   const row = await db
@@ -242,7 +281,8 @@ export async function recordSnapshot(
   db: D1Database,
   flight: FlightCandidate,
   hoursToDeparture: number | null,
-  note?: string
+  note?: string,
+  economyComfort?: { emptyRowsTotal: number; adjacentSpareSeats: number } | null
 ): Promise<void> {
   await ensureSchema(db);
   await db
@@ -253,8 +293,9 @@ export async function recordSnapshot(
         business_open, business_occupied, business_blocked,
         prem_econ_open, prem_econ_occupied, prem_econ_blocked,
         economy_open, economy_occupied, economy_blocked,
+        empty_rows_total, adjacent_spare,
         disruption_count, score, status, raw_note
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       flight.flightKey,
@@ -271,6 +312,8 @@ export async function recordSnapshot(
       flight.cabins.economy.available,
       flight.cabins.economy.occupied,
       flight.cabins.economy.blocked,
+      economyComfort ? economyComfort.emptyRowsTotal : null,
+      economyComfort ? economyComfort.adjacentSpareSeats : null,
       flight.disruptions.length,
       flight.standbyScore,
       flight.readiness,

@@ -50,7 +50,7 @@ def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
     hrs = hours_until_departure(watch.get("departure_date", ""), watch.get("departure_time"))
     if hrs is None:
         return False, None, "invalid date"
-    if hrs < -1.0:
+    if hrs < -6.0:
         return False, hrs, "departed"
     if hrs > 336.0:
         return False, hrs, ">14d out"
@@ -67,14 +67,11 @@ def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
         except ValueError:
             pass
 
-    # Pre-close window (T-95m to T-60m): always capture latest load before check-in closes
-    if 0.9 <= hrs <= 1.6:
-        return True, hrs, "pre-close window"
-    if hrs < 0.9:
-        # Inside T-54m: refresh if we haven't checked in the last 30m (last-known-good preserved if locked)
-        return (age_mins >= 30.0), hrs, "post-close check"
+    # T-2h window (and pre-close): poll every 5m without exceeding safe rate
+    if -5.0 <= hrs <= 2.0:
+        return (age_mins >= 4.5), hrs, "T-2h high-freq window (5m)"
     if hrs <= 24.0:
-        return (age_mins >= 30.0), hrs, "T-24h check-in window"
+        return (age_mins >= 14.5), hrs, "T-24h check-in window (15m)"
     return (age_mins >= 180.0), hrs, "standard 3h cadence"
 
 

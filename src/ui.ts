@@ -282,6 +282,37 @@ export function renderHtml(): string {
       background: rgba(56,189,248,0.14);
       color: #7dd3fc;
     }
+    @media (max-width: 768px) {
+      .container { padding: 12px 10px 40px; }
+      header { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .search-grid { grid-template-columns: 1fr; }
+      .flight-top { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .cabins-grid { grid-template-columns: 1fr 1fr; }
+      table.watches-table, table.watches-table thead, table.watches-table tbody, table.watches-table th, table.watches-table td, table.watches-table tr {
+        display: block;
+      }
+      table.watches-table thead { display: none; }
+      table.watches-table tr {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background: rgba(15,23,42,0.55);
+      }
+      table.watches-table td {
+        border-bottom: none;
+        padding: 4px 0;
+      }
+      table.watches-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 10px;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      .stage-pill { padding: 4px 9px; font-size: 11px; }
+    }
   </style>
 </head>
 <body>
@@ -401,6 +432,18 @@ export function renderHtml(): string {
         <span><span class="sm-group free-row" style="padding:2px 6px;font-size:0.72rem;color:#f8fafc;">Empty Row</span></span>
       </div>
       <div id="seatmapBody"></div>
+    </div>
+  </div>
+
+  <div id="graphModal" class="modal-backdrop">
+    <div class="modal" style="max-width:780px">
+      <div class="section-title">
+        <span id="graphTitle">Seat Availability History</span>
+        <button class="btn-ghost" onclick="closeGraph()">Close</button>
+      </div>
+      <div id="graphMeta" class="subtitle" style="margin-bottom:10px"></div>
+      <div id="graphToggles" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+      <div id="graphBody"></div>
     </div>
   </div>
 
@@ -714,8 +757,14 @@ export function renderHtml(): string {
         if (st === 'cancelled') {
           return { cls: 'score-red', text: 'Cancelled' };
         }
+        if (st === 'diverted') {
+          return { cls: 'score-red', text: 'Diverted' };
+        }
+        if (st === 'parked') {
+          return { cls: 'score-blue', text: 'Parked at Gate ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
+        }
         if (st === 'landed') {
-          return { cls: 'score-blue', text: 'Landed ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
+          return { cls: 'score-blue', text: 'Landed (Runway) ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
         }
         if (st === 'taxiing') {
           var taxiLabel = (inb.taxiMins !== null && inb.taxiMins !== undefined && inb.taxiMins <= 4) ? 'Pushback' : 'Taxiing';
@@ -726,10 +775,11 @@ export function renderHtml(): string {
           return { cls: 'score-blue', text: taxiLabel + taxiTxt };
         }
         if (st === 'enroute') {
+          var arrCd = (inb.arriveInMins !== null && inb.arriveInMins !== undefined && inb.arriveInMins > 0) ? ' · ' + fmtMinsCountdown(inb.arriveInMins) : '';
           if (inb.delayMins >= 15) {
-            return { cls: 'score-amber', text: 'Enroute · +' + inb.delayMins + 'm delayed' + (turnTxt ? ' (' + turnTxt + ')' : '') };
+            return { cls: 'score-amber', text: 'Enroute · +' + inb.delayMins + 'm delayed' + arrCd + (turnTxt ? ' (' + turnTxt + ')' : '') };
           }
-          return { cls: 'score-green', text: 'Enroute · On time' + (turnTxt ? ' (' + turnTxt + ')' : '') };
+          return { cls: 'score-green', text: 'Enroute · On time' + arrCd + (turnTxt ? ' (' + turnTxt + ')' : '') };
         }
         var depIso = inb.estimatedDeparture || inb.scheduledDeparture || '';
         var etdTxt = fmtUtcTime(depIso);
@@ -743,13 +793,14 @@ export function renderHtml(): string {
         return { cls: inb.delayMins >= 15 ? 'score-amber' : 'score-slate', text: label };
       }
       function renderAlertToggles(w) {
-        var a = w.alertStages || { etd: true, taxiing: true, enroute: true, landed: true, disruption: true };
+        var a = w.alertStages || { etd: true, taxiing: true, enroute: true, landed: true, disruption: true, diversion: true };
         var stages = [
           { key: 'etd', label: 'ETD' },
           { key: 'taxiing', label: 'Taxiing' },
           { key: 'enroute', label: 'Enroute' },
           { key: 'landed', label: 'Landed' },
-          { key: 'disruption', label: 'Delay/Cancel' }
+          { key: 'disruption', label: 'Delay/Cancel' },
+          { key: 'diversion', label: 'Diversion' }
         ];
         return '<div style="margin-top:4px">' +
           '<span style="font-size:10px;color:#64748b;margin-right:4px">Alerts:</span>' +
@@ -777,7 +828,11 @@ export function renderHtml(): string {
         var sb = stageBadge(inb, estTxt);
         var sc = inb.surfaceCongestion;
         var congHtml = sc
-          ? '<div style="font-size:10px;margin-top:2px;color:' + (sc.level === 'heavy' ? '#f87171' : sc.level === 'moderate' ? '#fbbf24' : '#4ade80') + '">🛬 ' + sc.summary + '</div>'
+          ? '<div style="font-size:10px;margin-top:2px;color:' + (sc.level === 'heavy' ? '#f87171' : sc.level === 'moderate' ? '#fbbf24' : '#4ade80') + '">🛫 ' + sc.summary + '</div>'
+          : '';
+        var ac = inb.arrivalCongestion;
+        var arrCongHtml = ac
+          ? '<div style="font-size:10px;margin-top:2px;color:' + (ac.level === 'heavy' ? '#f87171' : ac.level === 'moderate' ? '#fbbf24' : '#4ade80') + '">🛬 ' + ac.summary + '</div>'
           : '';
         var impactNote = (inb.outboundImpact === 'high' || inb.outboundImpact === 'watch')
           ? '<div style="font-size:10px;color:' + (inb.outboundImpact === 'high' ? '#f87171' : '#fbbf24') + ';margin-top:2px">⚠ ' + (inb.impactSummary || '') + '</div>'
@@ -798,6 +853,7 @@ export function renderHtml(): string {
           '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">' + depTxt + 'ETA ' + estTxt + (estTxt !== schedTxt ? ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' : '') + delayTxt + '</div>' +
           '<div style="margin-top:3px"><span class="score-badge ' + sb.cls + '" style="font-size:10px;padding:2px 6px">' + sb.text + '</span></div>' +
           congHtml +
+          arrCongHtml +
           impactNote +
           (links ? '<div style="margin-top:3px">' + links + '</div>' : '') +
           renderAlertToggles(w);
@@ -835,19 +891,63 @@ export function renderHtml(): string {
           '<button type="button" class="btn-ghost" style="padding:1px 5px;font-size:10px;" title="Clear seat" onclick="saveWatchSeat(\\'' + w.flight_key + '\\', true)">×</button>' +
         '</div>' + rowHtml;
       }
-      box.innerHTML = '<table><thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Inbound Aircraft</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
-        watches.map(w => '<tr>' +
-          '<td><strong>' + w.flight_number + '</strong>' + renderSeatCell(w) + '</td>' +
-          '<td>' + w.origin + ' → ' + w.destination + '</td>' +
-          '<td>' + w.departure_date + ' ' + (w.departure_time || '') + '</td>' +
-          '<td>' + w.target_cabin + '</td>' +
-          '<td>' + renderInboundCell(w) + '</td>' +
-          '<td><span class="score-badge ' + badgeClass(w.last_status) + '">' + (w.last_status || 'pending').toUpperCase() + ' (' + (w.last_score ?? '?') + ')</span></td>' +
-          '<td><button class="btn-ghost" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button> ' +
-          '<button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +
-          '<button class="btn-ghost" onclick="removeWatch(\\'' + w.flight_key + '\\')">Remove</button></td>' +
-        '</tr>').join("") +
-      '</tbody></table>';
+      function renderStatusCell(w) {
+        var badge = '<span class="score-badge ' + badgeClass(w.last_status) + '" title="Standby Score: ' + (w.last_score ?? '?') + '/100">' + (w.last_status || 'pending').toUpperCase() + '</span>';
+        var tc = w.targetCabinSummary;
+        var ft = w.flightTotalSummary;
+        var loadHtml = '';
+        if (tc && tc.total > 0) {
+          var tcPct = Math.round((tc.occupied / tc.total) * 100);
+          var tcCol = tcPct >= 88 ? '#f87171' : tcPct >= 70 ? '#fbbf24' : '#4ade80';
+          loadHtml += '<div style="margin-top:4px;font-size:14px;font-weight:800;color:' + tcCol + '">' + tc.total + ' / ' + tc.open + ' <span style="font-size:10px;font-weight:500;color:#94a3b8">(' + tc.available + ' avail)</span></div>';
+        }
+        if (ft && ft.total > 0) {
+          var ftPct = Math.round((ft.occupied / ft.total) * 100);
+          var ftCol = ftPct >= 88 ? '#f87171' : ftPct >= 70 ? '#fbbf24' : '#4ade80';
+          loadHtml += '<div style="font-size:10px;color:#94a3b8">Total: <strong style="color:' + ftCol + '">' + ft.total + ' / ' + ft.open + '</strong> (' + ftPct + '% full)</div>';
+        }
+        if (w.lastSeatmapAt) {
+          loadHtml += '<div style="font-size:10px;color:#64748b">SM: ' + String(w.lastSeatmapAt).slice(11, 16) + 'Z</div>';
+        }
+        return badge + loadHtml;
+      }
+      function renderOutboundMeta(w) {
+        var out = w.outbound;
+        var base = w.departure_date + ' ' + (w.departure_time || '');
+        if (!out) return base;
+        var bits = [];
+        if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
+        if (out.delayMins >= 15) bits.push('<span style="color:#f87171;font-size:10px">+' + out.delayMins + 'm</span>');
+        if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
+        return base + (bits.length ? '<div style="margin-top:3px">' + bits.join(' ') + '</div>' : '');
+      }
+      function renderWatchRows(list) {
+        return list.map(function(w) {
+          return '<tr>' +
+            '<td data-label="Flight"><strong>' + w.flight_number + '</strong>' + renderSeatCell(w) + '</td>' +
+            '<td data-label="Route">' + w.origin + ' → ' + w.destination + '</td>' +
+            '<td data-label="Date">' + renderOutboundMeta(w) + '</td>' +
+            '<td data-label="Cabin">' + w.target_cabin + '</td>' +
+            '<td data-label="Inbound Aircraft">' + renderInboundCell(w) + '</td>' +
+            '<td data-label="Status">' + renderStatusCell(w) + '</td>' +
+            '<td data-label="Actions"><button class="btn-ghost" onclick="openGraph(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\', \\'' + w.departure_date + '\\', \\'' + (w.departure_time || '') + '\\')">Graph</button> ' +
+            '<button class="btn-ghost" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button> ' +
+            '<button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +
+            '<button class="btn-ghost" onclick="removeWatch(\\'' + w.flight_key + '\\')">Remove</button></td>' +
+          '</tr>';
+        }).join('');
+      }
+      var activeWatches = watches.filter(function(w) { return !w.archived; });
+      var archivedWatches = watches.filter(function(w) { return Boolean(w.archived); });
+      var thead = '<thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Inbound Aircraft</th><th>Status</th><th>Actions</th></tr></thead>';
+      var html = activeWatches.length > 0
+        ? '<table class="watches-table">' + thead + '<tbody>' + renderWatchRows(activeWatches) + '</tbody></table>'
+        : '<div class="subtitle">No active watched flights.</div>';
+      if (archivedWatches.length > 0) {
+        html += '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;color:#94a3b8">Archived / Past Flights (' + archivedWatches.length + ' — full history &amp; graphs preserved)</summary>' +
+          '<table class="watches-table" style="margin-top:8px">' + thead + '<tbody>' + renderWatchRows(archivedWatches) + '</tbody></table></details>';
+      }
+      box.innerHTML = html;
     }
 
     async function removeWatch(flightKey) {
@@ -881,6 +981,118 @@ export function renderHtml(): string {
 
     function closeHistory() {
       document.getElementById("historyModal").classList.remove("open");
+    }
+
+    var graphState = { snaps: [], depDate: "", depTime: "", visible: { first: true, business: true, prem_econ: true, economy: true, emptyRows: true, adjSpare: true } };
+
+    function closeGraph() {
+      document.getElementById("graphModal").classList.remove("open");
+    }
+
+    function toggleGraphSeries(key) {
+      graphState.visible[key] = !graphState.visible[key];
+      renderGraphChart();
+    }
+
+    function renderGraphChart() {
+      var snaps = graphState.snaps;
+      var seriesDefs = [
+        { key: "first", label: "First Open", color: "#c084fc", get: function(s) { return (s.first_open || 0) + (s.first_blocked || 0); } },
+        { key: "business", label: "Business Open", color: "#f472b6", get: function(s) { return (s.business_open || 0) + (s.business_blocked || 0); } },
+        { key: "prem_econ", label: "Prem Econ Open", color: "#fbbf24", get: function(s) { return (s.prem_econ_open || 0) + (s.prem_econ_blocked || 0); } },
+        { key: "economy", label: "Economy Open", color: "#4ade80", get: function(s) { return (s.economy_open || 0) + (s.economy_blocked || 0); } },
+        { key: "emptyRows", label: "Empty Rows (L+M+R)", color: "#38bdf8", get: function(s) { return s.empty_rows_total != null ? s.empty_rows_total : null; } },
+        { key: "adjSpare", label: "Adjacent Spare", color: "#94a3b8", get: function(s) { return s.adjacent_spare != null ? s.adjacent_spare : null; } }
+      ];
+      document.getElementById("graphToggles").innerHTML = seriesDefs.map(function(sd) {
+        var on = graphState.visible[sd.key];
+        return '<button type="button" class="stage-pill ' + (on ? 'on' : '') + '" style="border-color:' + (on ? sd.color : 'rgba(148,163,184,0.28)') + ';color:' + (on ? sd.color : '#64748b') + '" onclick="toggleGraphSeries(\\'' + sd.key + '\\')">' + sd.label + '</button>';
+      }).join("");
+
+      if (!snaps || snaps.length === 0) {
+        document.getElementById("graphBody").innerHTML = '<p class="subtitle">No snapshots recorded yet.</p>';
+        return;
+      }
+
+      var maxY = 10;
+      seriesDefs.forEach(function(sd) {
+        if (!graphState.visible[sd.key]) return;
+        snaps.forEach(function(s) {
+          var v = sd.get(s);
+          if (v !== null && v > maxY) maxY = v;
+        });
+      });
+      maxY = Math.ceil(maxY * 1.1);
+
+      var W = 700, H = 260, padL = 38, padR = 16, padT = 16, padB = 28;
+      var plotW = W - padL - padR, plotH = H - padT - padB;
+      var n = snaps.length;
+      var xFor = function(i) { return n === 1 ? padL + plotW / 2 : padL + (i / (n - 1)) * plotW; };
+      var yFor = function(v) { return padT + plotH - (v / maxY) * plotH; };
+
+      var grid = '';
+      for (var g = 0; g <= 4; g++) {
+        var yVal = Math.round((maxY * g) / 4);
+        var yy = yFor(yVal);
+        grid += '<line x1="' + padL + '" y1="' + yy + '" x2="' + (W - padR) + '" y2="' + yy + '" stroke="rgba(148,163,184,0.18)" stroke-dasharray="3,3" />';
+        grid += '<text x="' + (padL - 6) + '" y="' + (yy + 3) + '" text-anchor="end" fill="#64748b" font-size="10">' + yVal + '</text>';
+      }
+
+      var paths = '';
+      seriesDefs.forEach(function(sd) {
+        if (!graphState.visible[sd.key]) return;
+        var pts = [];
+        var dots = '';
+        snaps.forEach(function(s, i) {
+          var v = sd.get(s);
+          if (v === null) return;
+          var x = xFor(i).toFixed(1), y = yFor(v).toFixed(1);
+          pts.push(x + ',' + y);
+          dots += '<circle cx="' + x + '" cy="' + y + '" r="3" fill="' + sd.color + '"><title>' + sd.label + ': ' + v + ' at ' + s.captured_at + '</title></circle>';
+        });
+        if (pts.length >= 2) {
+          paths += '<polyline fill="none" stroke="' + sd.color + '" stroke-width="2" points="' + pts.join(' ') + '" />';
+        }
+        paths += dots;
+      });
+
+      var xLabels = '';
+      var step = Math.max(1, Math.floor(n / 5));
+      for (var i = 0; i < n; i += step) {
+        var lbl = String(snaps[i].captured_at || '').slice(11, 16) + 'Z';
+        xLabels += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle" fill="#64748b" font-size="10">' + lbl + '</text>';
+      }
+
+      document.getElementById("graphBody").innerHTML =
+        '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;background:rgba(2,6,23,0.45);border:1px solid var(--border);border-radius:8px;">' +
+        grid + paths + xLabels + '</svg>';
+    }
+
+    async function openGraph(flightKey, flightNum, depDate, depTime) {
+      document.getElementById("graphTitle").textContent = flightNum + " — Seat Availability Over Time";
+      document.getElementById("graphMeta").textContent = "Loading snapshots...";
+      document.getElementById("graphModal").classList.add("open");
+      var res = await fetch("/api/history/" + encodeURIComponent(flightKey));
+      var data = await res.json();
+      var snaps = data.snapshots || [];
+      graphState.snaps = snaps;
+      graphState.depDate = depDate;
+      graphState.depTime = depTime;
+      if (snaps.length > 0) {
+        var lastSnap = snaps[snaps.length - 1];
+        var lastIso = String(lastSnap.captured_at || '').replace(' ', 'T') + 'Z';
+        var lastMs = new Date(lastIso).getTime();
+        var schedIso = depDate ? (depDate + 'T' + (depTime || '18:00') + ':00Z') : '';
+        var schedMs = schedIso ? new Date(schedIso).getTime() : NaN;
+        var diffNote = (!isNaN(lastMs) && !isNaN(schedMs))
+          ? ' (' + Math.round((schedMs - lastMs) / 60000) + 'm before ' + (depTime || '18:00') + ' sched)'
+          : '';
+        document.getElementById("graphMeta").textContent =
+          "Snapshots: " + snaps.length + " · Last seat map: " + lastSnap.captured_at + " UTC" + diffNote;
+      } else {
+        document.getElementById("graphMeta").textContent = "No snapshots recorded yet.";
+      }
+      renderGraphChart();
     }
 
     async function openSeatmap(flightKey, flightNum) {

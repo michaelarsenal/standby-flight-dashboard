@@ -2,8 +2,8 @@ name: ExpertFlyer Seat Map Sync
 
 on:
   schedule:
-    # Runs every 15 minutes to catch T-24h check-in and T-75m..T-65m pre-close windows
-    - cron: "*/15 * * * *"
+    # Runs every 5 minutes; script throttles to 15m normally and 5m inside T-2h
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:

@@ -35,6 +35,7 @@ export async function sendStagePushAlert(
     `${inbound.inboundFlight} (${inbound.origin} → ${inbound.destination}${inbound.registration ? `, ${inbound.registration}` : ""})`,
     inbound.impactSummary,
     inbound.surfaceCongestion ? inbound.surfaceCongestion.summary : "",
+    inbound.arrivalCongestion ? inbound.arrivalCongestion.summary : "",
     inbound.estimatedArrival ? `ETA: ${inbound.estimatedArrival}` : "",
   ]
     .filter(Boolean)
@@ -43,11 +44,11 @@ export async function sendStagePushAlert(
   const topic = ntfyTopic || env.NTFY_TOPIC || "";
   let sent = false;
   if (topic) {
-    const isUrgent = inbound.stage === "cancelled" || inbound.outboundImpact === "high";
+    const isUrgent = inbound.stage === "cancelled" || inbound.stage === "diverted" || inbound.outboundImpact === "high";
     const tags =
-      inbound.stage === "cancelled"
+      inbound.stage === "cancelled" || inbound.stage === "diverted"
         ? "rotating_light,airplane"
-        : inbound.stage === "landed"
+        : inbound.stage === "landed" || inbound.stage === "parked"
           ? "airplane_arriving,white_check_mark"
           : inbound.stage === "taxiing"
             ? "taxi,airplane_departure"
@@ -95,6 +96,44 @@ export async function sendSeatMonitorAlert(
     sent = await sendNtfyPush(topic, title, message, {
       priority: "high",
       tags: "seat,warning",
+    });
+  }
+
+  if (env.RESEND_API_KEY && env.ALERT_EMAIL_TO) {
+    const from = env.ALERT_EMAIL_FROM || "Standby Monitor <onboarding@resend.dev>";
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: env.ALERT_EMAIL_TO.split(",").map((s) => s.trim()),
+        subject: title,
+        html: `<p><strong>${title}</strong></p><p>${message.replace(/\n/g, "<br/>")}</p><p>Flight: ${watch.flight_number} (${watch.origin} → ${watch.destination}) on ${watch.departure_date}</p>`,
+      }),
+    });
+    if (res.ok) sent = true;
+  }
+
+  return sent;
+}
+
+export async function sendOutboundAlert(
+  env: Env,
+  ntfyTopic: string | null,
+  watch: WatchedFlight,
+  title: string,
+  message: string,
+  urgent = false
+): Promise<boolean> {
+  const topic = ntfyTopic || env.NTFY_TOPIC || "";
+  let sent = false;
+  if (topic) {
+    sent = await sendNtfyPush(topic, title, message, {
+      priority: urgent ? "high" : "default",
+      tags: urgent ? "rotating_light,airplane" : "airplane,information_source",
     });
   }
 

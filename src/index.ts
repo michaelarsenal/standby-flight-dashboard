@@ -1,6 +1,7 @@
 import { expandAirportInput } from "./airports.ts";
-import { sendNtfyPush, sendSeatMonitorAlert, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
+import { sendNtfyPush, sendOutboundAlert, sendSeatMonitorAlert, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
 import {
+  archiveOldWatches,
   deleteWatch,
   getEfSeatmap,
   getEfSeatmapsByKeys,
@@ -14,6 +15,8 @@ import {
   setSetting,
   updateWatchAlerts,
   updateWatchInboundStage,
+  updateWatchMilestones,
+  updateWatchOutboundState,
   updateWatchSeat,
   updateWatchSeatState,
   updateWatchStatus,
@@ -29,6 +32,7 @@ import {
   fetchFlightAwareDisruptions,
   fetchInboundAircraftSignal,
   fetchInboundDetails,
+  fetchWatchedFlightTelemetry,
 } from "./providers/flightaware.ts";
 import { fetchAirportWeatherRisk } from "./providers/weather.ts";
 import {
@@ -455,6 +459,7 @@ export default {
         enroute: body.enroute !== undefined ? Boolean(body.enroute) : current.enroute,
         landed: body.landed !== undefined ? Boolean(body.landed) : current.landed,
         disruption: body.disruption !== undefined ? Boolean(body.disruption) : current.disruption,
+        diversion: body.diversion !== undefined ? Boolean(body.diversion) : current.diversion,
       };
       await updateWatchAlerts(env.DB, flightKey, updated);
       return jsonResponse({ ok: true, alertStages: updated });
@@ -489,6 +494,8 @@ export default {
 
     if (path === "/api/watches" && request.method === "GET") {
       if (!env.DB) return jsonResponse({ watches: [], ntfyTopic: env.NTFY_TOPIC || "" });
+      const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      await archiveOldWatches(env.DB, cutoff);
       const [watches, savedTopic, efMap] = await Promise.all([
         listWatches(env.DB),
         getSetting(env.DB, "ntfy_topic"),
@@ -497,7 +504,6 @@ export default {
       const seatKeys = watches.filter((w) => w.assigned_seat).map((w) => w.flight_key);
       const seatmapMap = seatKeys.length > 0 ? await getEfSeatmapsByKeys(env.DB, seatKeys) : new Map<string, string>();
       const ntfyTopic = savedTopic || env.NTFY_TOPIC || "";
-      const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
       const enriched = await Promise.all(
         watches.map(async (w) => {
           let nextWatch = w;
@@ -509,11 +515,29 @@ export default {
               prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
               economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
             };
+            const targetKey = ((w.target_cabin || "economy") as CabinKey);
+            const tc = cabins[targetKey];
+            const targetCabinSummary = tc && tc.total > 0
+              ? { total: tc.total, open: tc.available + tc.blocked, occupied: tc.occupied, available: tc.available, blocked: tc.blocked }
+              : null;
+            const allCabs = [cabins.first, cabins.business, cabins.prem_econ, cabins.economy].filter((c) => c.total > 0);
+            const flightTotalSummary = allCabs.length > 0
+              ? allCabs.reduce(
+                  (acc, c) => ({
+                    total: acc.total + c.total,
+                    open: acc.open + c.available + c.blocked,
+                    occupied: acc.occupied + c.occupied,
+                    available: acc.available + c.available,
+                    blocked: acc.blocked + c.blocked,
+                  }),
+                  { total: 0, open: 0, occupied: 0, available: 0, blocked: 0 }
+                )
+              : null;
             const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
             const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
             const rescored = computeStandbyScore({
               cabins,
-              targetCabin: ((w.target_cabin || "economy") as CabinKey),
+              targetCabin: targetKey,
               fareBuckets,
               disruptions: [],
               hoursToDeparture: hrs,
@@ -521,21 +545,28 @@ export default {
             if (w.last_status !== rescored.readiness || w.last_score !== rescored.score) {
               await updateWatchStatus(env.DB!, w.flight_key, rescored.readiness, rescored.score);
             }
-            nextWatch = { ...w, last_status: rescored.readiness, last_score: rescored.score };
+            nextWatch = {
+              ...w,
+              last_status: rescored.readiness,
+              last_score: rescored.score,
+              targetCabinSummary,
+              flightTotalSummary,
+              lastSeatmapAt: snap.captured_at,
+            };
           }
           if (w.assigned_seat) {
             const seatMonitor = inspectAssignedSeat(seatmapMap.get(w.flight_key), w.assigned_seat);
             nextWatch = { ...nextWatch, seatMonitor };
           }
-          if (!env.FLIGHTAWARE_API_KEY || w.departure_date < cutoff) return nextWatch;
+          if (!env.FLIGHTAWARE_API_KEY || w.departure_date < cutoff || w.archived) return nextWatch;
           try {
-            const inbound = await fetchInboundDetails(
+            const telemetry = await fetchWatchedFlightTelemetry(
               env.FLIGHTAWARE_API_KEY!,
               w.flight_number,
               w.departure_date,
               w.departure_time,
             );
-            return { ...nextWatch, inbound };
+            return { ...nextWatch, inbound: telemetry.inbound, outbound: telemetry.outbound };
           } catch {
             return nextWatch;
           }
@@ -691,7 +722,8 @@ export default {
       };
 
       const note = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
-      await recordSnapshot(env.DB, candidate, hrs, note);
+      const economyComfort = body.seatmap ? computeEconomySeatStats(body.seatmap) : null;
+      await recordSnapshot(env.DB, candidate, hrs, note, economyComfort);
       if (body.seatmap) {
         await upsertEfSeatmap(env.DB, body.flightKey, candidate.aircraft, body.seatmap);
       }
@@ -790,37 +822,55 @@ export default {
 
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
     if (!env.DB) return;
+    const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    await archiveOldWatches(env.DB, cutoff);
     const watches = await listWatches(env.DB);
-    const today = new Date().toISOString().slice(0, 10);
     const ntfyTopic = await getSetting(env.DB, "ntfy_topic");
     const utcMin = new Date().getUTCMinutes();
-    const runDuffelPoll = utcMin < 5 || (utcMin >= 30 && utcMin < 35);
+    const runDuffelPoll = utcMin === 0 || utcMin === 30;
 
     const efMap = await getLatestExpertFlyerSnapshots(env.DB);
     for (const w of watches) {
-      if (w.departure_date < today) continue;
+      if (w.departure_date < cutoff || w.archived) continue;
 
-      if (env.FLIGHTAWARE_API_KEY) {
+      const hrsToOut = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
+      const lastSt = w.last_inbound_stage || "";
+      const isHotWindow =
+        (hrsToOut !== null && hrsToOut <= 8 && hrsToOut >= -6) ||
+        lastSt.startsWith("taxiing") ||
+        lastSt.startsWith("enroute") ||
+        lastSt === "landed" ||
+        lastSt === "diverted";
+
+      if (env.FLIGHTAWARE_API_KEY && (isHotWindow || utcMin % 5 === 0)) {
         try {
-          const inbound = await fetchInboundDetails(
+          const telemetry = await fetchWatchedFlightTelemetry(
             env.FLIGHTAWARE_API_KEY,
             w.flight_number,
             w.departure_date,
             w.departure_time
           );
+          const inbound = telemetry.inbound;
+          const outbound = telemetry.outbound;
+          const alerts = parseAlertStages(w.alert_stages);
+
           if (inbound) {
             const isDelayed = inbound.delayMins >= 15;
             const delayBucket = Math.floor(inbound.delayMins / 15) * 15;
             const stageKey =
               inbound.stage === "cancelled"
                 ? "cancelled"
-                : inbound.stage === "landed"
-                  ? "landed"
-                  : inbound.stage === "taxiing"
-                    ? (isDelayed ? `taxiing_delayed_${delayBucket}` : "taxiing")
-                    : inbound.stage === "enroute"
-                      ? (isDelayed ? `enroute_delayed_${delayBucket}` : "enroute")
-                      : (isDelayed ? `etd_delayed_${delayBucket}` : "etd");
+                : inbound.stage === "diverted"
+                  ? "diverted"
+                  : inbound.stage === "parked"
+                    ? "parked"
+                    : inbound.stage === "landed"
+                      ? "landed"
+                      : inbound.stage === "taxiing"
+                        ? (isDelayed ? `taxiing_delayed_${delayBucket}` : "taxiing")
+                        : inbound.stage === "enroute"
+                          ? (isDelayed ? `enroute_delayed_${delayBucket}` : "enroute")
+                          : (isDelayed ? `etd_delayed_${delayBucket}` : "etd");
 
             if (w.last_inbound_stage !== stageKey) {
               const prev = w.last_inbound_stage || "";
@@ -836,14 +886,14 @@ export default {
                   (prevMatch?.[1] === "enroute" && stageKey.startsWith("enroute_delayed_"))) &&
                 delayBucket <= prevBucket;
 
-              const alerts = parseAlertStages(w.alert_stages);
               const shouldAlert =
                 !isLegacySameStage &&
                 !isDelayReduced &&
                 ((stageKey === "cancelled" && alerts.disruption) ||
+                  (stageKey === "diverted" && alerts.diversion) ||
                   (stageKey.includes("_delayed") && alerts.disruption) ||
                   (stageKey === "taxiing" && alerts.taxiing) ||
-                  (stageKey === "landed" && alerts.landed) ||
+                  ((stageKey === "landed" || stageKey === "parked") && alerts.landed) ||
                   (stageKey === "enroute" && alerts.enroute) ||
                   (stageKey === "etd" && alerts.etd));
 
@@ -851,24 +901,94 @@ export default {
                 const label =
                   stageKey === "cancelled"
                     ? "CANCELLED"
-                    : stageKey === "landed"
-                      ? "LANDED"
-                      : stageKey.startsWith("taxiing")
-                        ? `TAXIING / MOVING (ADS-B Live${inbound.taxiMins != null ? `, ${inbound.taxiMins}m` : ""}${isDelayed ? `, +${inbound.delayMins}m delayed` : ""})`
-                        : stageKey.startsWith("enroute_delayed")
-                          ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
-                          : stageKey === "enroute"
-                            ? "ENROUTE (ON TIME)"
-                            : stageKey.startsWith("etd_delayed")
-                              ? (prevBucket !== null ? `FURTHER DELAY (+${inbound.delayMins}m)` : `ETD DELAYED (+${inbound.delayMins}m)`)
-                              : "ETD SCHEDULED";
+                    : stageKey === "diverted"
+                      ? "DIVERTED"
+                      : stageKey === "parked"
+                        ? "PARKED AT GATE"
+                        : stageKey === "landed"
+                          ? "LANDED (ON RUNWAY)"
+                          : stageKey.startsWith("taxiing")
+                            ? `TAXIING / MOVING (ADS-B Live${inbound.taxiMins != null ? `, ${inbound.taxiMins}m` : ""}${isDelayed ? `, +${inbound.delayMins}m delayed` : ""})`
+                            : stageKey.startsWith("enroute_delayed")
+                              ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
+                              : stageKey === "enroute"
+                                ? "ENROUTE (ON TIME)"
+                                : stageKey.startsWith("etd_delayed")
+                                  ? (prevBucket !== null ? `FURTHER DELAY (+${inbound.delayMins}m)` : `ETD DELAYED (+${inbound.delayMins}m)`)
+                                  : "ETD SCHEDULED";
                 await sendStagePushAlert(env, ntfyTopic, w, inbound, label);
               }
               await updateWatchInboundStage(env.DB, w.flight_key, stageKey);
             }
+
+            // Arrival milestones: 60 mins and 20 mins from arrival
+            if (inbound.stage === "enroute" && inbound.arriveInMins !== null && inbound.arriveInMins !== undefined) {
+              let msState: { m60?: boolean; m20?: boolean } = {};
+              if (w.last_inbound_milestones) {
+                try { msState = JSON.parse(w.last_inbound_milestones); } catch {}
+              }
+              let msChanged = false;
+              if (inbound.arriveInMins <= 20 && inbound.arriveInMins > 0 && !msState.m20) {
+                msState.m20 = true;
+                msState.m60 = true;
+                msChanged = true;
+                if (alerts.landed) {
+                  await sendStagePushAlert(env, ntfyTopic, w, inbound, `20m TO ARRIVAL (${inbound.destination})`);
+                }
+              } else if (inbound.arriveInMins <= 60 && inbound.arriveInMins > 20 && !msState.m60) {
+                msState.m60 = true;
+                msChanged = true;
+                if (alerts.landed) {
+                  await sendStagePushAlert(env, ntfyTopic, w, inbound, `60m TO ARRIVAL (${inbound.destination})`);
+                }
+              }
+              if (msChanged) {
+                await updateWatchMilestones(env.DB, w.flight_key, JSON.stringify(msState));
+              }
+            }
+          }
+
+          if (outbound) {
+            const outDelayBucket = outbound.delayMins >= 15 ? Math.floor(outbound.delayMins / 15) * 15 : 0;
+            let prevOut: { gate?: string; delayBucket?: number; cancelled?: boolean; diverted?: boolean } | null = null;
+            if (w.last_outbound_state) {
+              try { prevOut = JSON.parse(w.last_outbound_state); } catch {}
+            }
+            if (prevOut) {
+              if (outbound.cancelled && !prevOut.cancelled && alerts.disruption) {
+                await sendOutboundAlert(env, ntfyTopic, w, `${w.flight_number} CANCELLED`, `Outbound ${w.flight_number} (${w.origin} → ${w.destination}) is showing CANCELLED.`, true);
+              } else if (outbound.diverted && !prevOut.diverted && alerts.diversion) {
+                await sendOutboundAlert(env, ntfyTopic, w, `${w.flight_number} DIVERTED`, `Outbound ${w.flight_number} (${w.origin} → ${w.destination}) is showing DIVERTED.`, true);
+              }
+              if (outbound.gate && outbound.gate !== prevOut.gate) {
+                const msg = prevOut.gate
+                  ? `Gate changed from ${prevOut.gate} to ${outbound.gate}${outbound.terminal ? ` (Terminal ${outbound.terminal})` : ""}.`
+                  : `Gate ${outbound.gate} assigned${outbound.terminal ? ` (Terminal ${outbound.terminal})` : ""}.`;
+                await sendOutboundAlert(env, ntfyTopic, w, `${w.flight_number} Gate ${outbound.gate}`, msg, false);
+              }
+              if (outDelayBucket >= 15 && outDelayBucket > (prevOut.delayBucket ?? 0) && alerts.disruption) {
+                await sendOutboundAlert(
+                  env,
+                  ntfyTopic,
+                  w,
+                  `${w.flight_number} Delayed (+${outbound.delayMins}m)`,
+                  `Outbound ${w.flight_number} estimated departure ${outbound.estimatedOut} (+${outbound.delayMins}m delay).`,
+                  true
+                );
+              }
+            }
+            const nextOutStr = JSON.stringify({
+              gate: outbound.gate,
+              delayBucket: outDelayBucket,
+              cancelled: outbound.cancelled,
+              diverted: outbound.diverted,
+            });
+            if (nextOutStr !== w.last_outbound_state) {
+              await updateWatchOutboundState(env.DB, w.flight_key, nextOutStr);
+            }
           }
         } catch {
-          // Ignore inbound check failure in cron
+          // Ignore inbound/outbound check failure in cron
         }
       }
 

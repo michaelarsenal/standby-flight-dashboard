@@ -1,4 +1,5 @@
-import type { InboundFlightInfo, InboundStage, RouteDisruption, SurfaceCongestion } from "../types.ts";
+import type { InboundFlightInfo, InboundStage, OutboundFlightInfo, RouteDisruption, SurfaceCongestion } from "../types.ts";
+import { fetchAirportWeatherRisk } from "./weather.ts";
 
 const AEROAPI_BASE = "https://aeroapi.flightaware.com/aeroapi";
 
@@ -120,14 +121,24 @@ export async function fetchInboundDetails(
   departureDate?: string,
   departureTime?: string | null
 ): Promise<InboundFlightInfo | null> {
+  const res = await fetchWatchedFlightTelemetry(apiKey, flightNumber, departureDate, departureTime);
+  return res.inbound;
+}
+
+export async function fetchWatchedFlightTelemetry(
+  apiKey: string,
+  flightNumber: string,
+  departureDate?: string,
+  departureTime?: string | null
+): Promise<{ inbound: InboundFlightInfo | null; outbound: OutboundFlightInfo | null }> {
   try {
     const res = await fetch(`${AEROAPI_BASE}/flights/${encodeURIComponent(flightNumber)}?max_pages=1`, {
       headers: { "x-apikey": apiKey, Accept: "application/json" },
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { inbound: null, outbound: null };
     const data = (await res.json()) as { flights?: any[] };
     const flights = data.flights ?? [];
-    if (flights.length === 0) return null;
+    if (flights.length === 0) return { inbound: null, outbound: null };
 
     // Pick flight matching local departureDate/departureTime (accounting for UTC offset, e.g. 21:45 EST = 02:45Z next day)
     let upcoming: any = null;
@@ -148,6 +159,20 @@ export async function fetchInboundDetails(
       }
     }
     if (!upcoming) upcoming = flights[0];
+
+    const outbound: OutboundFlightInfo | null = upcoming
+      ? {
+          flightNumber: String(upcoming.ident_iata || upcoming.ident || flightNumber).toUpperCase(),
+          gate: String(upcoming.gate_origin || ""),
+          terminal: String(upcoming.terminal_origin || ""),
+          status: String(upcoming.status || (upcoming.cancelled ? "Cancelled" : "Scheduled")),
+          scheduledOut: String(upcoming.scheduled_out || ""),
+          estimatedOut: String(upcoming.actual_out || upcoming.estimated_out || upcoming.scheduled_out || ""),
+          delayMins: typeof upcoming.departure_delay === "number" ? Math.round(upcoming.departure_delay / 60) : 0,
+          cancelled: Boolean(upcoming.cancelled),
+          diverted: Boolean(upcoming.diverted),
+        }
+      : null;
 
     let inbound: any = null;
     if (upcoming?.inbound_fa_flight_id) {
@@ -179,7 +204,7 @@ export async function fetchInboundDetails(
       }
     }
 
-    if (!inbound) return null;
+    if (!inbound) return { inbound: null, outbound };
 
     const inboundFlight = String(inbound.ident_iata || inbound.ident || "Inbound").toUpperCase();
     const inboundIdent = String(inbound.ident || inboundFlight).toUpperCase();
@@ -200,7 +225,11 @@ export async function fetchInboundDetails(
     let stage: InboundStage = "scheduled";
     if (inbound.cancelled || statusLower.includes("cancel")) {
       stage = "cancelled";
-    } else if (inbound.actual_in || statusLower.includes("arrived") || statusLower.includes("landed")) {
+    } else if (inbound.diverted || statusLower.includes("divert")) {
+      stage = "diverted";
+    } else if (inbound.actual_in) {
+      stage = "parked";
+    } else if (inbound.actual_on || statusLower.includes("arrived") || statusLower.includes("landed")) {
       stage = "landed";
     } else if (inbound.actual_out && !inbound.actual_off) {
       stage = "taxiing";
@@ -216,6 +245,14 @@ export async function fetchInboundDetails(
       }
     }
 
+    let arriveInMins: number | null = null;
+    if ((stage === "enroute" || stage === "taxiing") && estimatedArrival) {
+      const arrMs = new Date(estimatedArrival).getTime();
+      if (!Number.isNaN(arrMs)) {
+        arriveInMins = Math.round((arrMs - Date.now()) / 60000);
+      }
+    }
+
     let taxiMins: number | null = null;
     if (stage === "taxiing" && inbound.actual_out) {
       const outMs = new Date(String(inbound.actual_out)).getTime();
@@ -224,10 +261,14 @@ export async function fetchInboundDetails(
       }
     }
 
-    let surfaceCongestion: SurfaceCongestion | null = null;
-    if (origin && (stage === "taxiing" || (stage === "scheduled" && departInMins !== null && departInMins <= 45))) {
-      surfaceCongestion = await fetchSurfaceCongestion(apiKey, origin);
-    }
+    const [surfaceCongestion, arrivalCongestion] = await Promise.all([
+      origin && (stage === "taxiing" || (stage === "scheduled" && departInMins !== null && departInMins <= 45))
+        ? fetchSurfaceCongestion(apiKey, origin)
+        : Promise.resolve(null),
+      destination && (stage === "enroute" || (arriveInMins !== null && arriveInMins <= 90))
+        ? fetchArrivalCongestion(apiKey, destination)
+        : Promise.resolve(null),
+    ]);
 
     const outIso = upcoming.scheduled_out || (departureDate ? `${departureDate}T${departureTime || "18:00"}:00Z` : "");
     let turnaroundMins: number | null = null;
@@ -244,6 +285,9 @@ export async function fetchInboundDetails(
     if (stage === "cancelled") {
       outboundImpact = "high";
       impactSummary = "Inbound cancelled — likely outbound delay or aircraft swap";
+    } else if (stage === "diverted") {
+      outboundImpact = "high";
+      impactSummary = "Inbound diverted — high risk of outbound delay or swap";
     } else if (turnaroundMins !== null && turnaroundMins < 55) {
       outboundImpact = "high";
       impactSummary = `Tight ${turnaroundMins}m turnaround — likely to delay outbound`;
@@ -262,34 +306,39 @@ export async function fetchInboundDetails(
         : "On time — no outbound impact";
     }
 
-    const adsbLive = stage === "taxiing" || stage === "enroute" || stage === "landed" || Boolean(inbound.actual_out || inbound.actual_off);
+    const adsbLive = stage === "taxiing" || stage === "enroute" || stage === "landed" || stage === "parked" || stage === "diverted" || Boolean(inbound.actual_out || inbound.actual_off);
 
     return {
-      inboundFlight,
-      inboundIdent,
-      origin,
-      destination,
-      registration,
-      status,
-      stage,
-      adsbLive,
-      departInMins,
-      taxiMins,
-      surfaceCongestion,
-      scheduledDeparture,
-      estimatedDeparture,
-      hasDeparted,
-      scheduledArrival,
-      estimatedArrival,
-      delayMins,
-      turnaroundMins,
-      outboundImpact,
-      impactSummary,
-      flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(inboundFlight)}`,
-      flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(inboundIdent)}`,
+      outbound,
+      inbound: {
+        inboundFlight,
+        inboundIdent,
+        origin,
+        destination,
+        registration,
+        status,
+        stage,
+        adsbLive,
+        departInMins,
+        arriveInMins,
+        taxiMins,
+        surfaceCongestion,
+        arrivalCongestion,
+        scheduledDeparture,
+        estimatedDeparture,
+        hasDeparted,
+        scheduledArrival,
+        estimatedArrival,
+        delayMins,
+        turnaroundMins,
+        outboundImpact,
+        impactSummary,
+        flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(inboundFlight)}`,
+        flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(inboundIdent)}`,
+      },
     };
   } catch {
-    return null;
+    return { inbound: null, outbound: null };
   }
 }
 
@@ -366,6 +415,53 @@ export async function fetchSurfaceCongestion(
       activeDepartures,
       avgDelayMins,
       estimatedTaxiMins,
+      summary,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchArrivalCongestion(
+  apiKey: string,
+  airportCode: string
+): Promise<SurfaceCongestion | null> {
+  const code = airportCode.trim().toUpperCase();
+  if (!code) return null;
+  try {
+    const [delayRes, wx] = await Promise.all([
+      fetch(`${AEROAPI_BASE}/airports/${encodeURIComponent(code)}/delays`, {
+        headers: { "x-apikey": apiKey, Accept: "application/json" },
+      }),
+      fetchAirportWeatherRisk(code),
+    ]);
+
+    let avgDelayMins = 0;
+    if (delayRes.ok) {
+      const dData = (await delayRes.json()) as { delay_secs?: number };
+      avgDelayMins = typeof dData.delay_secs === "number" ? Math.max(0, Math.round(dData.delay_secs / 60)) : 0;
+    }
+
+    const wxRisk = wx?.riskPoints ?? 0;
+    const weatherSummary = wx?.signals?.length ? wx.signals[0].replace(`${code}: `, "") : "Clear";
+
+    let level: "light" | "moderate" | "heavy" = "light";
+    if (avgDelayMins >= 25 || wxRisk >= 20) {
+      level = "heavy";
+    } else if (avgDelayMins >= 12 || wxRisk >= 10) {
+      level = "moderate";
+    }
+
+    const levelLabel = level === "heavy" ? "Heavy" : level === "moderate" ? "Moderate" : "Light";
+    const delayPart = avgDelayMins > 0 ? `+${avgDelayMins}m delay` : "on-time";
+    const summary = `${code} arrival: ${levelLabel} (${delayPart} · ${weatherSummary})`;
+    return {
+      airport: code,
+      level,
+      activeDepartures: 0,
+      avgDelayMins,
+      estimatedTaxiMins: 0,
+      weatherSummary,
       summary,
     };
   } catch {
