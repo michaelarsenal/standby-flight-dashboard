@@ -715,11 +715,12 @@ export function renderHtml(): string {
           return { cls: 'score-blue', text: 'Landed ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
         }
         if (st === 'taxiing') {
+          var taxiLabel = (inb.taxiMins !== null && inb.taxiMins !== undefined && inb.taxiMins <= 4) ? 'Pushback' : 'Taxiing';
           var taxiTxt = inb.taxiMins !== null && inb.taxiMins !== undefined ? ' (' + inb.taxiMins + 'm)' : '';
           if (inb.delayMins >= 15) {
-            return { cls: 'score-amber', text: 'Taxiing / Moving' + taxiTxt + ' · +' + inb.delayMins + 'm' };
+            return { cls: 'score-amber', text: taxiLabel + taxiTxt + ' · +' + inb.delayMins + 'm' };
           }
-          return { cls: 'score-blue', text: 'Taxiing / Moving' + taxiTxt };
+          return { cls: 'score-blue', text: taxiLabel + taxiTxt };
         }
         if (st === 'enroute') {
           if (inb.delayMins >= 15) {
@@ -735,7 +736,7 @@ export function renderHtml(): string {
         var extra = [];
         if (cdHtml) extra.push(cdHtml);
         if (inb.delayMins >= 15) extra.push('+' + inb.delayMins + 'm delayed');
-        var label = 'ETD ' + etdTxt + (extra.length ? ' (' + extra.join(', ') + ')' : '');
+        var label = 'At Gate · ETD ' + etdTxt + (extra.length ? ' (' + extra.join(', ') + ')' : '');
         return { cls: inb.delayMins >= 15 ? 'score-amber' : 'score-slate', text: label };
       }
       function renderAlertToggles(w) {
