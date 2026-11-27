@@ -72,6 +72,9 @@ export interface InboundFlightInfo {
   destination: string;
   registration: string;
   status: string;
+  scheduledDeparture?: string;
+  estimatedDeparture?: string;
+  hasDeparted?: boolean;
   scheduledArrival: string;
   estimatedArrival: string;
   delayMins: number;

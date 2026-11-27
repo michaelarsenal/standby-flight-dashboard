@@ -129,29 +129,67 @@ export async function fetchInboundDetails(
     const flights = data.flights ?? [];
     if (flights.length === 0) return null;
 
-    // Pick flight matching departureDate if available, else the next upcoming leg
-    const upcoming =
-      (departureDate
-        ? flights.find((f) => String(f.scheduled_out || "").startsWith(departureDate))
-        : null) || flights[0];
+    // Pick flight matching local departureDate/departureTime (accounting for UTC offset, e.g. 21:45 EST = 02:45Z next day)
+    let upcoming: any = null;
+    if (departureDate) {
+      const targetMs = new Date(`${departureDate}T${departureTime || "18:00"}:00Z`).getTime();
+      let bestDiff = Infinity;
+      for (const f of flights) {
+        const outMs = new Date(String(f.scheduled_out || "")).getTime();
+        if (Number.isNaN(outMs)) continue;
+        const diff = outMs - targetMs;
+        if (diff >= -3 * 3600_000 && diff <= 11 * 3600_000 && Math.abs(diff) < bestDiff) {
+          bestDiff = Math.abs(diff);
+          upcoming = f;
+        }
+      }
+      if (!upcoming) {
+        upcoming = flights.find((f) => String(f.scheduled_out || "").startsWith(departureDate)) || null;
+      }
+    }
+    if (!upcoming) upcoming = flights[0];
 
-    if (!upcoming?.inbound_fa_flight_id) return null;
+    let inbound: any = null;
+    if (upcoming?.inbound_fa_flight_id) {
+      const inRes = await fetch(
+        `${AEROAPI_BASE}/flights/${encodeURIComponent(upcoming.inbound_fa_flight_id)}`,
+        { headers: { "x-apikey": apiKey, Accept: "application/json" } }
+      );
+      if (inRes.ok) {
+        const inData = (await inRes.json()) as { flights?: any[] };
+        inbound = (inData.flights ?? [])[0] ?? null;
+      }
+    }
 
-    const inRes = await fetch(
-      `${AEROAPI_BASE}/flights/${encodeURIComponent(upcoming.inbound_fa_flight_id)}`,
-      { headers: { "x-apikey": apiKey, Accept: "application/json" } }
-    );
-    if (!inRes.ok) return null;
-    const inData = (await inRes.json()) as { flights?: any[] };
-    const inbound = (inData.flights ?? [])[0];
+    // Fallback: if inbound_fa_flight_id isn't linked yet but registration is assigned, look up tail's previous leg
+    if (!inbound && upcoming?.registration && upcoming?.scheduled_out) {
+      const regRes = await fetch(
+        `${AEROAPI_BASE}/flights/${encodeURIComponent(String(upcoming.registration))}?max_pages=1`,
+        { headers: { "x-apikey": apiKey, Accept: "application/json" } }
+      );
+      if (regRes.ok) {
+        const regData = (await regRes.json()) as { flights?: any[] };
+        const outMs = new Date(String(upcoming.scheduled_out)).getTime();
+        const originCode = String(upcoming.origin?.code_iata || upcoming.origin?.code || "").toUpperCase();
+        inbound = (regData.flights ?? []).find((f) => {
+          const destCode = String(f.destination?.code_iata || f.destination?.code || "").toUpperCase();
+          const inMs = new Date(String(f.estimated_in || f.scheduled_in || "")).getTime();
+          return destCode === originCode && !Number.isNaN(inMs) && inMs < outMs && outMs - inMs <= 16 * 3600_000;
+        }) ?? null;
+      }
+    }
+
     if (!inbound) return null;
 
     const inboundFlight = String(inbound.ident_iata || inbound.ident || "Inbound").toUpperCase();
     const inboundIdent = String(inbound.ident || inboundFlight).toUpperCase();
     const origin = String(inbound.origin?.code_iata || inbound.origin?.code || "").toUpperCase();
     const destination = String(inbound.destination?.code_iata || inbound.destination?.code || "").toUpperCase();
-    const registration = String(inbound.registration || "").toUpperCase();
+    const registration = String(inbound.registration || upcoming.registration || "").toUpperCase();
     const status = String(inbound.status || (inbound.cancelled ? "Cancelled" : "Scheduled"));
+    const scheduledDeparture = String(inbound.scheduled_out || "");
+    const estimatedDeparture = String(inbound.actual_out || inbound.estimated_out || inbound.scheduled_out || "");
+    const hasDeparted = Boolean(inbound.actual_out);
     const scheduledArrival = String(inbound.scheduled_in || "");
     const estimatedArrival = String(inbound.actual_in || inbound.estimated_in || inbound.scheduled_in || "");
     const delayMins = typeof inbound.arrival_delay === "number" ? Math.round(inbound.arrival_delay / 60) : 0;
@@ -196,6 +234,9 @@ export async function fetchInboundDetails(
       destination,
       registration,
       status,
+      scheduledDeparture,
+      estimatedDeparture,
+      hasDeparted,
       scheduledArrival,
       estimatedArrival,
       delayMins,

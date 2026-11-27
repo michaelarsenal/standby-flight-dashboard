@@ -552,7 +552,7 @@ export function renderHtml(): string {
       }
       function fmtUtcTime(iso) {
         if (!iso) return '?';
-        var m = String(iso).match(/T(\d{2}:\d{2})/);
+        var m = String(iso).match(/T([0-9]{2}:[0-9]{2})/);
         return m ? m[1] + 'Z' : String(iso);
       }
       function impactBadgeClass(impact) {
@@ -569,6 +569,7 @@ export function renderHtml(): string {
         }
         var routeTxt = (inb.origin || '?') + ' → ' + (inb.destination || '?');
         var regTxt = inb.registration ? ' <span style="color:#94a3b8">(' + inb.registration + ')</span>' : '';
+        var depTxt = inb.estimatedDeparture ? (inb.hasDeparted ? 'Dep ' : 'ETD ') + fmtUtcTime(inb.estimatedDeparture) + ' · ' : '';
         var estTxt = fmtUtcTime(inb.estimatedArrival || inb.scheduledArrival);
         var schedTxt = fmtUtcTime(inb.scheduledArrival);
         var delayTxt = inb.delayMins > 0 ? ' <span style="color:#f87171">(+' + inb.delayMins + 'm)</span>' : '';
@@ -580,7 +581,7 @@ export function renderHtml(): string {
           links += '<a href="' + inb.flightAwareUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FA ↗</a>';
         }
         return '<div style="font-size:12px"><strong>' + inb.inboundFlight + '</strong> ' + routeTxt + regTxt + '</div>' +
-          '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">Est ' + estTxt + ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' + delayTxt + '</div>' +
+          '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">' + depTxt + 'ETA ' + estTxt + (estTxt !== schedTxt ? ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' : '') + delayTxt + '</div>' +
           '<div style="margin-top:3px"><span class="score-badge ' + impactBadgeClass(inb.outboundImpact) + '" style="font-size:10px;padding:2px 6px">' + (inb.impactSummary || 'No impact') + '</span></div>' +
           (links ? '<div style="margin-top:3px">' + links + '</div>' : '');
       }
