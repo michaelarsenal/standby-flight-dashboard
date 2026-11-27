@@ -127,33 +127,56 @@ async function runFlightSearch(params: {
     }
   }
 
-  // Fetch Open-Meteo predictive weather risk for all queried origins & destinations
   const weatherByAirport = new Map<string, Awaited<ReturnType<typeof fetchAirportWeatherRisk>>>();
-  const uniqueAirports = Array.from(new Set([...origins, ...destinations]));
-  await Promise.all(
-    uniqueAirports.map(async (code) => {
-      weatherByAirport.set(code, await fetchAirportWeatherRisk(code, date));
-    })
-  );
-
-  // Fetch FlightAware hub delay status if API key is configured
   const hubDelayByAirport = new Map<string, { riskPoints: number; signal: string | null }>();
-  if (env.FLIGHTAWARE_API_KEY) {
-    await Promise.all(
-      uniqueAirports.map(async (code) => {
-        hubDelayByAirport.set(code, await fetchAirportDelaySignal(env.FLIGHTAWARE_API_KEY!, code));
-      })
-    );
+  const uniqueAirports = Array.from(new Set([...origins, ...destinations]));
+
+  const routePairs: Array<{ o: string; d: string }> = [];
+  for (const o of origins) {
+    for (const d of destinations) {
+      if (o !== d) routePairs.push({ o, d });
+    }
   }
 
+  const [rawCandidates, allDisruptionsNested] = await Promise.all([
+    env.DUFFEL_API_TOKEN
+      ? fetchDuffelCandidates({
+          token: env.DUFFEL_API_TOKEN,
+          origins,
+          destinations,
+          date,
+          airlines,
+          skipSeatmapKeys: new Set(efSnapshots.keys()),
+        })
+      : Promise.resolve([]),
+    env.FLIGHTAWARE_API_KEY && env.DUFFEL_API_TOKEN
+      ? Promise.all(
+          routePairs.map(({ o, d }) =>
+            fetchFlightAwareDisruptions({
+              apiKey: env.FLIGHTAWARE_API_KEY!,
+              origin: o,
+              destination: d,
+              date,
+              airlines,
+            })
+          )
+        )
+      : Promise.resolve([]),
+    Promise.all(
+      uniqueAirports.map(async (code) => {
+        weatherByAirport.set(code, await fetchAirportWeatherRisk(code, date));
+      })
+    ),
+    env.FLIGHTAWARE_API_KEY
+      ? Promise.all(
+          uniqueAirports.map(async (code) => {
+            hubDelayByAirport.set(code, await fetchAirportDelaySignal(env.FLIGHTAWARE_API_KEY!, code));
+          })
+        )
+      : Promise.resolve([]),
+  ]);
+
   if (env.DUFFEL_API_TOKEN) {
-    const rawCandidates = await fetchDuffelCandidates({
-      token: env.DUFFEL_API_TOKEN,
-      origins,
-      destinations,
-      date,
-      airlines,
-    });
 
     // Merge ExpertFlyer operating flight numbers & fare buckets over Duffel codeshares
     const matchedEfKeys = new Set<string>();
@@ -209,22 +232,7 @@ async function runFlightSearch(params: {
       });
     }
 
-    const allDisruptions: RouteDisruption[] = [];
-    if (env.FLIGHTAWARE_API_KEY) {
-      for (const o of origins) {
-        for (const d of destinations) {
-          if (o === d) continue;
-          const pairDisruptions = await fetchFlightAwareDisruptions({
-            apiKey: env.FLIGHTAWARE_API_KEY,
-            origin: o,
-            destination: d,
-            date,
-            airlines,
-          });
-          allDisruptions.push(...pairDisruptions);
-        }
-      }
-    }
+    const allDisruptions: RouteDisruption[] = allDisruptionsNested.flat();
 
     const seatmapMap = env.DB
       ? await getEfSeatmapsByKeys(env.DB, mergedClean.map((c) => c.flightKey))

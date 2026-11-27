@@ -40,8 +40,9 @@ export async function fetchDuffelCandidates(params: {
   destinations: string[];
   date: string;
   airlines: string[];
+  skipSeatmapKeys?: Set<string>;
 }): Promise<Omit<FlightCandidate, "disruptions" | "standbyScore" | "readiness" | "reasons">[]> {
-  const { token, origins, destinations, date, airlines } = params;
+  const { token, origins, destinations, date, airlines, skipSeatmapKeys } = params;
   const headers = {
     Authorization: `Bearer ${token}`,
     "Duffel-Version": "v2",
@@ -49,15 +50,15 @@ export async function fetchDuffelCandidates(params: {
     Accept: "application/json",
   };
 
-  const results: Omit<
-    FlightCandidate,
-    "disruptions" | "standbyScore" | "readiness" | "reasons"
-  >[] = [];
-
+  const pairs: Array<{ origin: string; destination: string }> = [];
   for (const origin of origins) {
     for (const destination of destinations) {
-      if (origin === destination) continue;
+      if (origin !== destination) pairs.push({ origin, destination });
+    }
+  }
 
+  const pairResults = await Promise.all(
+    pairs.map(async ({ origin, destination }) => {
       const offerReqRes = await fetch(`${DUFFEL_BASE}/air/offer_requests`, {
         method: "POST",
         headers,
@@ -79,7 +80,7 @@ export async function fetchDuffelCandidates(params: {
       const offerReqJson = (await offerReqRes.json()) as { data?: { offers?: any[] } };
       const offers = offerReqJson.data?.offers ?? [];
 
-      // Deduplicate by operating carrier + departure time, preferring non-codeshare (< 4000) flight numbers
+      // Deduplicate by operating carrier + departure time, excluding codeshares (>= 4000)
       const seenFlights = new Map<string, { flightNum: string; numVal: number; offer: any }>();
       for (const offer of offers) {
         const seg = offer?.slices?.[0]?.segments?.[0];
@@ -89,6 +90,7 @@ export async function fetchDuffelCandidates(params: {
         const rawDigits = String(seg.operating_carrier_flight_number || seg.marketing_carrier_flight_number || "").replace(/\D/g, "");
         if (!rawDigits) continue;
         const numVal = parseInt(rawDigits, 10);
+        if (numVal >= 4000) continue;
         const flightNum = `${carrier}${numVal}`;
         const depKey = `${carrier}-${String(seg.departing_at || "").slice(0, 16)}`;
         const existing = seenFlights.get(depKey);
@@ -97,61 +99,66 @@ export async function fetchDuffelCandidates(params: {
         }
       }
 
-      // Fetch seat map for each unique direct flight (capped to 8 per pair)
+      // Fetch seat maps in parallel (skipping flights that already have a cached ExpertFlyer snapshot)
       const uniqueOffers = Array.from(seenFlights.values()).slice(0, 8);
-      for (const { flightNum, offer } of uniqueOffers) {
-        const seg = offer.slices[0].segments[0];
-        const carrier = (seg.operating_carrier?.iata_code || seg.marketing_carrier?.iata_code || "").toUpperCase();
-        const cabins = emptyCabins();
+      return Promise.all(
+        uniqueOffers.map(async ({ flightNum, offer }) => {
+          const seg = offer.slices[0].segments[0];
+          const carrier = (seg.operating_carrier?.iata_code || seg.marketing_carrier?.iata_code || "").toUpperCase();
+          const cabins = emptyCabins();
+          const flightKey = buildFlightKey(carrier, flightNum, origin, destination, date);
 
-        const seatRes = await fetch(`${DUFFEL_BASE}/air/seat_maps?offer_id=${encodeURIComponent(offer.id)}`, {
-          headers,
-        });
-        if (seatRes.ok) {
-          const seatJson = (await seatRes.json()) as { data?: any[] };
-          for (const seatMap of seatJson.data ?? []) {
-            for (const cabin of seatMap.cabins ?? []) {
-              const key = mapCabinClass(cabin.cabin_class);
-              for (const row of cabin.rows ?? []) {
-                for (const section of row.sections ?? []) {
-                  for (const el of section.elements ?? []) {
-                    if (el.type !== "seat") continue;
-                    cabins[key].total += 1;
-                    if (Array.isArray(el.available_services) && el.available_services.length > 0) {
-                      cabins[key].available += 1;
-                    } else if (el.disclosures?.includes("blocked")) {
-                      cabins[key].blocked += 1;
-                    } else {
-                      cabins[key].occupied += 1;
+          if (!skipSeatmapKeys?.has(flightKey)) {
+            const seatRes = await fetch(`${DUFFEL_BASE}/air/seat_maps?offer_id=${encodeURIComponent(offer.id)}`, {
+              headers,
+            });
+            if (seatRes.ok) {
+              const seatJson = (await seatRes.json()) as { data?: any[] };
+              for (const seatMap of seatJson.data ?? []) {
+                for (const cabin of seatMap.cabins ?? []) {
+                  const key = mapCabinClass(cabin.cabin_class);
+                  for (const row of cabin.rows ?? []) {
+                    for (const section of row.sections ?? []) {
+                      for (const el of section.elements ?? []) {
+                        if (el.type !== "seat") continue;
+                        cabins[key].total += 1;
+                        if (Array.isArray(el.available_services) && el.available_services.length > 0) {
+                          cabins[key].available += 1;
+                        } else if (el.disclosures?.includes("blocked")) {
+                          cabins[key].blocked += 1;
+                        } else {
+                          cabins[key].occupied += 1;
+                        }
+                      }
                     }
                   }
                 }
               }
             }
           }
-        }
 
-        const depAt = String(seg.departing_at || "");
-        const arrAt = String(seg.arriving_at || "");
+          const depAt = String(seg.departing_at || "");
+          const arrAt = String(seg.arriving_at || "");
 
-        results.push({
-          flightKey: buildFlightKey(carrier, flightNum, origin, destination, date),
-          airline: carrier,
-          flightNumber: flightNum,
-          origin,
-          destination,
-          departureDate: date,
-          departureTime: depAt.slice(11, 16) || "00:00",
-          arrivalTime: arrAt.slice(11, 16) || "00:00",
-          duration: formatDuration(seg.duration),
-          aircraft: seg.aircraft?.iata_code || seg.aircraft?.name || "Widebody",
-          dataSource: "live",
-          cabins,
-          fareBuckets: null,
-        });
-      }
-    }
-  }
+          return {
+            flightKey,
+            airline: carrier,
+            flightNumber: flightNum,
+            origin,
+            destination,
+            departureDate: date,
+            departureTime: depAt.slice(11, 16) || "00:00",
+            arrivalTime: arrAt.slice(11, 16) || "00:00",
+            duration: formatDuration(seg.duration),
+            aircraft: seg.aircraft?.iata_code || seg.aircraft?.name || "Widebody",
+            dataSource: "live" as const,
+            cabins,
+            fareBuckets: null,
+          };
+        })
+      );
+    })
+  );
 
-  return results;
+  return pairResults.flat();
 }
