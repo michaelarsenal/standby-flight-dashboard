@@ -187,7 +187,7 @@ def fetch_seatmaps(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_url("**/dashboard**", wait_until="commit", timeout=25000)
+        page.wait_for_function("() => !location.pathname.includes('sign-in')", timeout=25000)
         page.wait_for_timeout(2000)
 
         for q in queries:
@@ -333,7 +333,7 @@ def fetch_availability(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_url("**/dashboard**", wait_until="commit", timeout=25000)
+        page.wait_for_function("() => !location.pathname.includes('sign-in')", timeout=25000)
         page.wait_for_timeout(2000)
 
         for q in avail_queries:
