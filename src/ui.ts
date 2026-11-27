@@ -893,23 +893,40 @@ export function renderHtml(): string {
       }
       function renderStatusCell(w) {
         var badge = '<span class="score-badge ' + badgeClass(w.last_status) + '" title="Standby Score: ' + (w.last_score ?? '?') + '/100">' + (w.last_status || 'pending').toUpperCase() + '</span>';
-        var tc = w.targetCabinSummary;
         var ft = w.flightTotalSummary;
         var loadHtml = '';
-        if (tc && tc.total > 0) {
-          var tcPct = Math.round((tc.occupied / tc.total) * 100);
-          var tcCol = tcPct >= 88 ? '#f87171' : tcPct >= 70 ? '#fbbf24' : '#4ade80';
-          loadHtml += '<div style="margin-top:4px;font-size:14px;font-weight:800;color:' + tcCol + '">' + tc.total + ' / ' + tc.open + ' <span style="font-size:10px;font-weight:500;color:#94a3b8">(' + tc.available + ' avail)</span></div>';
-        }
         if (ft && ft.total > 0) {
           var ftPct = Math.round((ft.occupied / ft.total) * 100);
           var ftCol = ftPct >= 88 ? '#f87171' : ftPct >= 70 ? '#fbbf24' : '#4ade80';
-          loadHtml += '<div style="font-size:10px;color:#94a3b8">Total: <strong style="color:' + ftCol + '">' + ft.total + ' / ' + ft.open + '</strong> (' + ftPct + '% full)</div>';
+          loadHtml += '<div style="margin-top:4px;font-size:15px;font-weight:800;color:' + ftCol + '">' + ft.total + ' / ' + ft.open + '</div>' +
+            '<div style="font-size:11px;color:#cbd5e1">' + ftPct + '% full</div>';
         }
         if (w.lastSeatmapAt) {
-          loadHtml += '<div style="font-size:10px;color:#64748b">SM: ' + String(w.lastSeatmapAt).slice(11, 16) + 'Z</div>';
+          loadHtml += '<div style="font-size:10px;color:#94a3b8;font-style:italic;margin-top:2px">EF ' + String(w.lastSeatmapAt).slice(11, 16) + 'Z</div>';
         }
         return badge + loadHtml;
+      }
+      function renderCabinCell(w) {
+        var loads = w.cabinLoads || [];
+        var ec = w.economyComfort;
+        if (loads.length === 0 && !ec) {
+          return '<span style="color:#64748b">' + (w.target_cabin || '—') + '</span>';
+        }
+        var lines = loads.map(function(c) {
+          var pct = c.total > 0 ? Math.round((c.occupied / c.total) * 100) : 0;
+          var col = pct >= 88 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#4ade80';
+          return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.45;white-space:nowrap;">' +
+            '<span style="color:#7dd3fc;font-weight:700;min-width:22px">' + c.bucket + '</span>' +
+            '<strong style="color:' + col + '">' + c.total + '/' + c.open + '</strong>' +
+          '</div>';
+        }).join('');
+        var comfortHtml = ec
+          ? '<div style="margin-top:3px;border-top:1px solid rgba(148,163,184,0.18);padding-top:2px;font-size:10.5px;color:#94a3b8;font-style:italic;line-height:1.35;">' +
+              '<div>Rows=' + ec.emptyRowsTotal + '</div>' +
+              '<div>Seats=' + ec.adjacentSpareSeats + '</div>' +
+            '</div>'
+          : '';
+        return '<div style="min-width:74px">' + lines + comfortHtml + '</div>';
       }
       function renderOutboundMeta(w) {
         var out = w.outbound;
@@ -922,18 +939,21 @@ export function renderHtml(): string {
         return base + (bits.length ? '<div style="margin-top:3px">' + bits.join(' ') + '</div>' : '');
       }
       function renderWatchRows(list) {
+        var actBtnStyle = 'padding:4px 7px;font-size:11px;white-space:nowrap;';
         return list.map(function(w) {
           return '<tr>' +
             '<td data-label="Flight"><strong>' + w.flight_number + '</strong>' + renderSeatCell(w) + '</td>' +
             '<td data-label="Route">' + w.origin + ' → ' + w.destination + '</td>' +
             '<td data-label="Date">' + renderOutboundMeta(w) + '</td>' +
-            '<td data-label="Cabin">' + w.target_cabin + '</td>' +
+            '<td data-label="Cabin">' + renderCabinCell(w) + '</td>' +
             '<td data-label="Inbound Aircraft">' + renderInboundCell(w) + '</td>' +
             '<td data-label="Status">' + renderStatusCell(w) + '</td>' +
-            '<td data-label="Actions"><button class="btn-ghost" onclick="openGraph(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\', \\'' + w.departure_date + '\\', \\'' + (w.departure_time || '') + '\\')">Graph</button> ' +
-            '<button class="btn-ghost" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button> ' +
-            '<button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +
-            '<button class="btn-ghost" onclick="removeWatch(\\'' + w.flight_key + '\\')">Remove</button></td>' +
+            '<td data-label="Actions"><div style="display:flex;flex-wrap:nowrap;gap:4px;">' +
+              '<button class="btn-ghost" style="' + actBtnStyle + '" onclick="openGraph(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\', \\'' + w.departure_date + '\\', \\'' + (w.departure_time || '') + '\\')">Graph</button>' +
+              '<button class="btn-ghost" style="' + actBtnStyle + '" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button>' +
+              '<button class="btn-ghost" style="' + actBtnStyle + '" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button>' +
+              '<button class="btn-ghost" style="' + actBtnStyle + '" onclick="removeWatch(\\'' + w.flight_key + '\\')">Remove</button>' +
+            '</div></td>' +
           '</tr>';
         }).join('');
       }

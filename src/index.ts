@@ -501,13 +501,15 @@ export default {
         getSetting(env.DB, "ntfy_topic"),
         getLatestExpertFlyerSnapshots(env.DB),
       ]);
-      const seatKeys = watches.filter((w) => w.assigned_seat).map((w) => w.flight_key);
+      const seatKeys = watches.map((w) => w.flight_key);
       const seatmapMap = seatKeys.length > 0 ? await getEfSeatmapsByKeys(env.DB, seatKeys) : new Map<string, string>();
       const ntfyTopic = savedTopic || env.NTFY_TOPIC || "";
       const enriched = await Promise.all(
         watches.map(async (w) => {
           let nextWatch = w;
           const snap = efMap.get(w.flight_key);
+          const smJson = seatmapMap.get(w.flight_key);
+          const economyComfort = smJson ? computeEconomySeatStats(smJson) : null;
           if (snap) {
             const cabins = {
               first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
@@ -534,6 +536,21 @@ export default {
                 )
               : null;
             const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
+            const cabinDefs: Array<{ key: CabinKey; code: string; max: number | null | undefined }> = [
+              { key: "first", code: "F", max: fareBuckets?.firstMax },
+              { key: "business", code: "J", max: fareBuckets?.businessMax },
+              { key: "prem_econ", code: "W", max: fareBuckets?.premEconMax },
+              { key: "economy", code: "Y", max: fareBuckets?.economyMax },
+            ];
+            const cabinLoads = cabinDefs
+              .filter((d) => cabins[d.key].total > 0)
+              .map((d) => ({
+                code: d.code,
+                bucket: d.max !== null && d.max !== undefined ? `${d.code}${d.max}` : d.code,
+                total: cabins[d.key].total,
+                open: cabins[d.key].available + cabins[d.key].blocked,
+                occupied: cabins[d.key].occupied,
+              }));
             const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
             const rescored = computeStandbyScore({
               cabins,
@@ -551,11 +568,15 @@ export default {
               last_score: rescored.score,
               targetCabinSummary,
               flightTotalSummary,
+              cabinLoads,
+              economyComfort,
               lastSeatmapAt: snap.captured_at,
             };
+          } else if (economyComfort) {
+            nextWatch = { ...w, economyComfort };
           }
           if (w.assigned_seat) {
-            const seatMonitor = inspectAssignedSeat(seatmapMap.get(w.flight_key), w.assigned_seat);
+            const seatMonitor = inspectAssignedSeat(smJson, w.assigned_seat);
             nextWatch = { ...nextWatch, seatMonitor };
           }
           if (!env.FLIGHTAWARE_API_KEY || w.departure_date < cutoff || w.archived) return nextWatch;
