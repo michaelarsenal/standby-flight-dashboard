@@ -820,7 +820,7 @@ export function renderHtml(): string {
         if (res.ok && data.ok) {
           alert(data.message || "ExpertFlyer sync triggered! Seat maps will refresh in ~1-2 minutes.");
         } else if (data.fallbackUrl) {
-          if (confirm((data.error || "GitHub token not set on Worker.") + "\n\nOpen GitHub Actions to click Run workflow manually?")) {
+          if (confirm((data.error || "GitHub token not set on Worker.") + "\\n\\nOpen GitHub Actions to click Run workflow manually?")) {
             window.open(data.fallbackUrl, "_blank", "noopener,noreferrer");
           }
         } else {
