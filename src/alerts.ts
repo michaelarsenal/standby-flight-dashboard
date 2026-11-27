@@ -34,6 +34,7 @@ export async function sendStagePushAlert(
   const body = [
     `${inbound.inboundFlight} (${inbound.origin} → ${inbound.destination}${inbound.registration ? `, ${inbound.registration}` : ""})`,
     inbound.impactSummary,
+    inbound.surfaceCongestion ? inbound.surfaceCongestion.summary : "",
     inbound.estimatedArrival ? `ETA: ${inbound.estimatedArrival}` : "",
   ]
     .filter(Boolean)
@@ -48,9 +49,11 @@ export async function sendStagePushAlert(
         ? "rotating_light,airplane"
         : inbound.stage === "landed"
           ? "airplane_arriving,white_check_mark"
-          : inbound.stage === "enroute"
-            ? "airplane_departure"
-            : "clock1";
+          : inbound.stage === "taxiing"
+            ? "taxi,airplane_departure"
+            : inbound.stage === "enroute"
+              ? "airplane_departure"
+              : "clock1";
     sent = await sendNtfyPush(topic, title, body, {
       priority: isUrgent ? "high" : "default",
       tags,

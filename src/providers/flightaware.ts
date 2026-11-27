@@ -1,4 +1,4 @@
-import type { InboundFlightInfo, RouteDisruption } from "../types.ts";
+import type { InboundFlightInfo, InboundStage, RouteDisruption, SurfaceCongestion } from "../types.ts";
 
 const AEROAPI_BASE = "https://aeroapi.flightaware.com/aeroapi";
 
@@ -197,12 +197,14 @@ export async function fetchInboundDetails(
     const delayMins = hasDeparted ? arrDelayMins : Math.max(arrDelayMins, depDelayMins);
 
     const statusLower = status.toLowerCase();
-    let stage: "scheduled" | "enroute" | "landed" | "cancelled" = "scheduled";
+    let stage: InboundStage = "scheduled";
     if (inbound.cancelled || statusLower.includes("cancel")) {
       stage = "cancelled";
     } else if (inbound.actual_in || statusLower.includes("arrived") || statusLower.includes("landed")) {
       stage = "landed";
-    } else if (inbound.actual_out || statusLower.includes("en route")) {
+    } else if (inbound.actual_out && !inbound.actual_off) {
+      stage = "taxiing";
+    } else if (inbound.actual_off || inbound.actual_out || statusLower.includes("en route")) {
       stage = "enroute";
     }
 
@@ -212,6 +214,19 @@ export async function fetchInboundDetails(
       if (!Number.isNaN(depMs)) {
         departInMins = Math.round((depMs - Date.now()) / 60000);
       }
+    }
+
+    let taxiMins: number | null = null;
+    if (stage === "taxiing" && inbound.actual_out) {
+      const outMs = new Date(String(inbound.actual_out)).getTime();
+      if (!Number.isNaN(outMs)) {
+        taxiMins = Math.max(0, Math.round((Date.now() - outMs) / 60000));
+      }
+    }
+
+    let surfaceCongestion: SurfaceCongestion | null = null;
+    if (origin && (stage === "taxiing" || (stage === "scheduled" && departInMins !== null && departInMins <= 45))) {
+      surfaceCongestion = await fetchSurfaceCongestion(apiKey, origin);
     }
 
     const outIso = upcoming.scheduled_out || (departureDate ? `${departureDate}T${departureTime || "18:00"}:00Z` : "");
@@ -256,6 +271,8 @@ export async function fetchInboundDetails(
       status,
       stage,
       departInMins,
+      taxiMins,
+      surfaceCongestion,
       scheduledDeparture,
       estimatedDeparture,
       hasDeparted,
@@ -289,4 +306,66 @@ export async function fetchInboundAircraftSignal(
     };
   }
   return { riskPoints: 0, signal: null };
+}
+
+export async function fetchSurfaceCongestion(
+  apiKey: string,
+  airportCode: string
+): Promise<SurfaceCongestion | null> {
+  const code = airportCode.trim().toUpperCase();
+  if (!code) return null;
+  try {
+    const [delayRes, depRes] = await Promise.all([
+      fetch(`${AEROAPI_BASE}/airports/${encodeURIComponent(code)}/delays`, {
+        headers: { "x-apikey": apiKey, Accept: "application/json" },
+      }),
+      fetch(`${AEROAPI_BASE}/airports/${encodeURIComponent(code)}/flights/scheduled_departures?max_pages=1`, {
+        headers: { "x-apikey": apiKey, Accept: "application/json" },
+      }),
+    ]);
+
+    let avgDelayMins = 0;
+    if (delayRes.ok) {
+      const dData = (await delayRes.json()) as { delay_secs?: number };
+      avgDelayMins = typeof dData.delay_secs === "number" ? Math.max(0, Math.round(dData.delay_secs / 60)) : 0;
+    }
+
+    let activeDepartures = 0;
+    if (depRes.ok) {
+      const fData = (await depRes.json()) as { scheduled_departures?: any[]; departures?: any[] };
+      const list = fData.scheduled_departures ?? fData.departures ?? [];
+      const nowMs = Date.now();
+      for (const f of list) {
+        const outMs = new Date(String(f.estimated_out || f.scheduled_out || "")).getTime();
+        if (!Number.isNaN(outMs) && Math.abs(outMs - nowMs) <= 30 * 60_000) {
+          activeDepartures++;
+        } else if (f.actual_out && !f.actual_off) {
+          activeDepartures++;
+        }
+      }
+    }
+
+    let level: "light" | "moderate" | "heavy" = "light";
+    let estimatedTaxiMins = 12;
+    if (avgDelayMins >= 25 || activeDepartures >= 18) {
+      level = "heavy";
+      estimatedTaxiMins = Math.max(25, Math.min(45, 18 + Math.round(avgDelayMins * 0.5)));
+    } else if (avgDelayMins >= 12 || activeDepartures >= 10) {
+      level = "moderate";
+      estimatedTaxiMins = 18;
+    }
+
+    const levelLabel = level === "heavy" ? "Heavy" : level === "moderate" ? "Moderate" : "Light";
+    const summary = `${code} ground: ${levelLabel} (~${estimatedTaxiMins}m taxi, ${activeDepartures} dep/30m${avgDelayMins > 0 ? `, +${avgDelayMins}m avg delay` : ""})`;
+    return {
+      airport: code,
+      level,
+      activeDepartures,
+      avgDelayMins,
+      estimatedTaxiMins,
+      summary,
+    };
+  } catch {
+    return null;
+  }
 }

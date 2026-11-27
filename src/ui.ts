@@ -699,6 +699,12 @@ export function renderHtml(): string {
         if (mins < 60) return 'in ' + mins + 'm';
         return 'in ' + Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
       }
+      function liveMinsFromIso(iso, fallbackMins) {
+        if (!iso) return fallbackMins;
+        var ms = new Date(iso).getTime();
+        if (isNaN(ms)) return fallbackMins;
+        return Math.round((ms - Date.now()) / 60000);
+      }
       function stageBadge(inb, estTxt) {
         var st = inb.stage || 'scheduled';
         var turnTxt = inb.turnaroundMins !== null && inb.turnaroundMins !== undefined ? inb.turnaroundMins + 'm turn' : '';
@@ -708,24 +714,35 @@ export function renderHtml(): string {
         if (st === 'landed') {
           return { cls: 'score-blue', text: 'Landed ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
         }
+        if (st === 'taxiing') {
+          var taxiTxt = inb.taxiMins !== null && inb.taxiMins !== undefined ? ' (' + inb.taxiMins + 'm)' : '';
+          if (inb.delayMins >= 15) {
+            return { cls: 'score-amber', text: 'Taxiing / Moving' + taxiTxt + ' · +' + inb.delayMins + 'm' };
+          }
+          return { cls: 'score-blue', text: 'Taxiing / Moving' + taxiTxt };
+        }
         if (st === 'enroute') {
           if (inb.delayMins >= 15) {
             return { cls: 'score-amber', text: 'Enroute · +' + inb.delayMins + 'm delayed' + (turnTxt ? ' (' + turnTxt + ')' : '') };
           }
           return { cls: 'score-green', text: 'Enroute · On time' + (turnTxt ? ' (' + turnTxt + ')' : '') };
         }
-        var etdTxt = fmtUtcTime(inb.estimatedDeparture || inb.scheduledDeparture);
-        var cd = fmtMinsCountdown(inb.departInMins);
+        var depIso = inb.estimatedDeparture || inb.scheduledDeparture || '';
+        var etdTxt = fmtUtcTime(depIso);
+        var minsLeft = liveMinsFromIso(depIso, inb.departInMins);
+        var cd = fmtMinsCountdown(minsLeft);
+        var cdHtml = cd ? '<span class="inb-cd" data-iso="' + depIso + '">' + cd + '</span>' : '';
         var extra = [];
-        if (cd) extra.push(cd);
+        if (cdHtml) extra.push(cdHtml);
         if (inb.delayMins >= 15) extra.push('+' + inb.delayMins + 'm delayed');
         var label = 'ETD ' + etdTxt + (extra.length ? ' (' + extra.join(', ') + ')' : '');
         return { cls: inb.delayMins >= 15 ? 'score-amber' : 'score-slate', text: label };
       }
       function renderAlertToggles(w) {
-        var a = w.alertStages || { etd: true, enroute: true, landed: true, disruption: true };
+        var a = w.alertStages || { etd: true, taxiing: true, enroute: true, landed: true, disruption: true };
         var stages = [
           { key: 'etd', label: 'ETD' },
+          { key: 'taxiing', label: 'Taxiing' },
           { key: 'enroute', label: 'Enroute' },
           { key: 'landed', label: 'Landed' },
           { key: 'disruption', label: 'Delay/Cancel' }
@@ -754,6 +771,10 @@ export function renderHtml(): string {
         var schedTxt = fmtUtcTime(inb.scheduledArrival);
         var delayTxt = inb.delayMins > 0 ? ' <span style="color:#f87171">(+' + inb.delayMins + 'm)</span>' : '';
         var sb = stageBadge(inb, estTxt);
+        var sc = inb.surfaceCongestion;
+        var congHtml = sc
+          ? '<div style="font-size:10px;margin-top:2px;color:' + (sc.level === 'heavy' ? '#f87171' : sc.level === 'moderate' ? '#fbbf24' : '#4ade80') + '">🛬 ' + sc.summary + '</div>'
+          : '';
         var impactNote = (inb.outboundImpact === 'high' || inb.outboundImpact === 'watch')
           ? '<div style="font-size:10px;color:' + (inb.outboundImpact === 'high' ? '#f87171' : '#fbbf24') + ';margin-top:2px">⚠ ' + (inb.impactSummary || '') + '</div>'
           : '';
@@ -767,6 +788,7 @@ export function renderHtml(): string {
         return '<div style="font-size:12px"><strong>' + inb.inboundFlight + '</strong> ' + routeTxt + regTxt + '</div>' +
           '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">' + depTxt + 'ETA ' + estTxt + (estTxt !== schedTxt ? ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' : '') + delayTxt + '</div>' +
           '<div style="margin-top:3px"><span class="score-badge ' + sb.cls + '" style="font-size:10px;padding:2px 6px">' + sb.text + '</span></div>' +
+          congHtml +
           impactNote +
           (links ? '<div style="margin-top:3px">' + links + '</div>' : '') +
           renderAlertToggles(w);
@@ -937,6 +959,18 @@ export function renderHtml(): string {
     document.getElementById("searchForm").addEventListener("submit", runSearch);
     checkMode();
     loadWatches();
+    setInterval(function() {
+      document.querySelectorAll(".inb-cd[data-iso]").forEach(function(el) {
+        var iso = el.getAttribute("data-iso");
+        if (!iso) return;
+        var ms = new Date(iso).getTime();
+        if (isNaN(ms)) return;
+        var mins = Math.round((ms - Date.now()) / 60000);
+        if (mins <= 0) el.textContent = "due now";
+        else if (mins < 60) el.textContent = "in " + mins + "m";
+        else el.textContent = "in " + Math.floor(mins / 60) + "h " + (mins % 60) + "m";
+      });
+    }, 30000);
   </script>
 </body>
 </html>`;

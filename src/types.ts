@@ -76,13 +76,23 @@ export interface SearchQuery {
   targetCabin: CabinKey;
 }
 
-export type InboundStage = "scheduled" | "enroute" | "landed" | "cancelled";
+export type InboundStage = "scheduled" | "taxiing" | "enroute" | "landed" | "cancelled";
 
 export interface AlertStages {
   etd: boolean;
+  taxiing: boolean;
   enroute: boolean;
   landed: boolean;
   disruption: boolean;
+}
+
+export interface SurfaceCongestion {
+  airport: string;
+  level: "light" | "moderate" | "heavy";
+  activeDepartures: number;
+  avgDelayMins: number;
+  estimatedTaxiMins: number;
+  summary: string;
 }
 
 export interface InboundFlightInfo {
@@ -94,6 +104,8 @@ export interface InboundFlightInfo {
   status: string;
   stage: InboundStage;
   departInMins: number | null;
+  taxiMins?: number | null;
+  surfaceCongestion?: SurfaceCongestion | null;
   scheduledDeparture?: string;
   estimatedDeparture?: string;
   hasDeparted?: boolean;

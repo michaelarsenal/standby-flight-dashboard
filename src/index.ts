@@ -451,6 +451,7 @@ export default {
       const current = parseAlertStages(existing.alert_stages);
       const updated: AlertStages = {
         etd: body.etd !== undefined ? Boolean(body.etd) : current.etd,
+        taxiing: body.taxiing !== undefined ? Boolean(body.taxiing) : current.taxiing,
         enroute: body.enroute !== undefined ? Boolean(body.enroute) : current.enroute,
         landed: body.landed !== undefined ? Boolean(body.landed) : current.landed,
         disruption: body.disruption !== undefined ? Boolean(body.disruption) : current.disruption,
@@ -792,6 +793,8 @@ export default {
     const watches = await listWatches(env.DB);
     const today = new Date().toISOString().slice(0, 10);
     const ntfyTopic = await getSetting(env.DB, "ntfy_topic");
+    const utcMin = new Date().getUTCMinutes();
+    const runDuffelPoll = utcMin < 5 || (utcMin >= 30 && utcMin < 35);
 
     const efMap = await getLatestExpertFlyerSnapshots(env.DB);
     for (const w of watches) {
@@ -813,13 +816,15 @@ export default {
                 ? "cancelled"
                 : inbound.stage === "landed"
                   ? "landed"
-                  : inbound.stage === "enroute"
-                    ? (isDelayed ? `enroute_delayed_${delayBucket}` : "enroute")
-                    : (isDelayed ? `etd_delayed_${delayBucket}` : "etd");
+                  : inbound.stage === "taxiing"
+                    ? (isDelayed ? `taxiing_delayed_${delayBucket}` : "taxiing")
+                    : inbound.stage === "enroute"
+                      ? (isDelayed ? `enroute_delayed_${delayBucket}` : "enroute")
+                      : (isDelayed ? `etd_delayed_${delayBucket}` : "etd");
 
             if (w.last_inbound_stage !== stageKey) {
               const prev = w.last_inbound_stage || "";
-              const prevMatch = prev.match(/^(etd|enroute)_delayed_(\d+)$/);
+              const prevMatch = prev.match(/^(etd|taxiing|enroute)_delayed_(\d+)$/);
               const prevBucket = prevMatch ? Number(prevMatch[2]) : null;
               const isLegacySameStage =
                 (prev === "etd_delayed" && stageKey.startsWith("etd_delayed_")) ||
@@ -827,6 +832,7 @@ export default {
               const isDelayReduced =
                 prevBucket !== null &&
                 ((prevMatch?.[1] === "etd" && stageKey.startsWith("etd_delayed_")) ||
+                  (prevMatch?.[1] === "taxiing" && stageKey.startsWith("taxiing_delayed_")) ||
                   (prevMatch?.[1] === "enroute" && stageKey.startsWith("enroute_delayed_"))) &&
                 delayBucket <= prevBucket;
 
@@ -836,6 +842,7 @@ export default {
                 !isDelayReduced &&
                 ((stageKey === "cancelled" && alerts.disruption) ||
                   (stageKey.includes("_delayed") && alerts.disruption) ||
+                  (stageKey === "taxiing" && alerts.taxiing) ||
                   (stageKey === "landed" && alerts.landed) ||
                   (stageKey === "enroute" && alerts.enroute) ||
                   (stageKey === "etd" && alerts.etd));
@@ -846,13 +853,15 @@ export default {
                     ? "CANCELLED"
                     : stageKey === "landed"
                       ? "LANDED"
-                      : stageKey.startsWith("enroute_delayed")
-                        ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
-                        : stageKey === "enroute"
-                          ? "ENROUTE (ON TIME)"
-                          : stageKey.startsWith("etd_delayed")
-                            ? (prevBucket !== null ? `FURTHER DELAY (+${inbound.delayMins}m)` : `ETD DELAYED (+${inbound.delayMins}m)`)
-                            : "ETD SCHEDULED";
+                      : stageKey.startsWith("taxiing")
+                        ? `TAXIING / MOVING (ADS-B Live${inbound.taxiMins != null ? `, ${inbound.taxiMins}m` : ""}${isDelayed ? `, +${inbound.delayMins}m delayed` : ""})`
+                        : stageKey.startsWith("enroute_delayed")
+                          ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
+                          : stageKey === "enroute"
+                            ? "ENROUTE (ON TIME)"
+                            : stageKey.startsWith("etd_delayed")
+                              ? (prevBucket !== null ? `FURTHER DELAY (+${inbound.delayMins}m)` : `ETD DELAYED (+${inbound.delayMins}m)`)
+                              : "ETD SCHEDULED";
                 await sendStagePushAlert(env, ntfyTopic, w, inbound, label);
               }
               await updateWatchInboundStage(env.DB, w.flight_key, stageKey);
@@ -863,7 +872,7 @@ export default {
         }
       }
 
-      if (efMap.has(w.flight_key)) continue;
+      if (!runDuffelPoll || efMap.has(w.flight_key)) continue;
 
       const result = await runFlightSearch({
         env,

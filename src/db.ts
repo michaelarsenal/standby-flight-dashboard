@@ -81,6 +81,7 @@ export async function ensureSchema(db: D1Database): Promise<void> {
 
 export const DEFAULT_ALERT_STAGES: AlertStages = {
   etd: true,
+  taxiing: true,
   enroute: true,
   landed: true,
   disruption: true,
@@ -92,6 +93,7 @@ export function parseAlertStages(raw?: string | null): AlertStages {
     const parsed = JSON.parse(raw) as Partial<AlertStages>;
     return {
       etd: parsed.etd !== false,
+      taxiing: parsed.taxiing !== false,
       enroute: parsed.enroute !== false,
       landed: parsed.landed !== false,
       disruption: parsed.disruption !== false,
