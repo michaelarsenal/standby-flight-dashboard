@@ -331,11 +331,13 @@ export function renderHtml(): string {
 
     <div id="disruptionBox"></div>
 
-    <div class="section-title">
-      <span id="resultsHeading">Search Results</span>
-      <span id="resultsMeta" class="subtitle"></span>
+    <div id="resultsSection" style="display:none">
+      <div class="section-title">
+        <span id="resultsHeading">Search Results</span>
+        <span id="resultsMeta" class="subtitle"></span>
+      </div>
+      <div id="resultsList" class="flight-list"></div>
     </div>
-    <div id="resultsList" class="flight-list"></div>
 
     <div class="card" style="margin-top: 22px;">
       <div class="section-title">
@@ -427,6 +429,7 @@ export function renderHtml(): string {
       const airlines = document.getElementById("airlines").value;
       const targetCabin = document.getElementById("targetCabin").value;
 
+      document.getElementById("resultsSection").style.display = "block";
       document.getElementById("resultsList").innerHTML = '<div class="card subtitle">Querying flights, seat maps, and live route status for ' + date + '...</div>';
 
       const qs = new URLSearchParams({ origins, destinations, date, airlines, targetCabin });
@@ -853,8 +856,23 @@ export function renderHtml(): string {
       document.getElementById("seatmapModal").classList.remove("open");
     }
 
+    async function checkMode() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        const modeBadge = document.getElementById("modeBadge");
+        if (data.mode === "live") {
+          modeBadge.className = "pill live";
+          modeBadge.textContent = "LIVE API (Duffel + FlightAware)";
+        } else {
+          modeBadge.className = "pill demo";
+          modeBadge.textContent = "DEMO MODE (Add API keys for live data)";
+        }
+      } catch {}
+    }
+
     document.getElementById("searchForm").addEventListener("submit", runSearch);
-    runSearch();
+    checkMode();
     loadWatches();
   </script>
 </body>
