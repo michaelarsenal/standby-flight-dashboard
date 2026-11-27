@@ -720,6 +720,31 @@ export function renderHtml(): string {
       }
     }
 
+    async function toggleAllAlerts(flightKey, enableAll) {
+      var payload = {
+        etd: enableAll,
+        taxiing: enableAll,
+        enroute: enableAll,
+        landed: enableAll,
+        disruption: enableAll,
+        diversion: enableAll
+      };
+      var res = await fetch("/api/watches/" + encodeURIComponent(flightKey) + "/alerts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        loadWatches();
+      }
+    }
+
+    function toggleAlertMenu(flightKey) {
+      var el = document.getElementById("alert-menu-" + flightKey);
+      if (!el) return;
+      el.style.display = (el.style.display === "none" || !el.style.display) ? "flex" : "none";
+    }
+
     async function loadWatches() {
       const box = document.getElementById("watchesList");
       const res = await fetch("/api/watches");
@@ -822,19 +847,28 @@ export function renderHtml(): string {
         var a = w.alertStages || { etd: true, taxiing: true, enroute: true, landed: true, disruption: true, diversion: true };
         var stages = [
           { key: 'etd', label: 'ETD' },
-          { key: 'taxiing', label: 'Taxiing' },
-          { key: 'enroute', label: 'Enroute' },
-          { key: 'landed', label: 'Landed' },
-          { key: 'disruption', label: 'Delay/Cancel' },
-          { key: 'diversion', label: 'Diversion' }
+          { key: 'taxiing', label: 'Taxi' },
+          { key: 'enroute', label: 'E/R' },
+          { key: 'landed', label: 'Land' },
+          { key: 'disruption', label: 'DLA' },
+          { key: 'diversion', label: 'Divert' }
         ];
-        return '<div style="margin-top:4px">' +
+        var onCount = stages.filter(function(s) { return a[s.key] !== false; }).length;
+        var allOn = onCount === stages.length;
+        var customLabel = allOn ? 'Custom ▾' : ('Custom (' + onCount + '/' + stages.length + ') ▾');
+        var checkboxes = stages.map(function(s) {
+          var isOn = a[s.key] !== false;
+          return '<label style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#cbd5e1;cursor:pointer;margin:0;">' +
+            '<input type="checkbox" ' + (isOn ? 'checked' : '') + ' onchange="toggleStageAlert(\\'' + w.flight_key + '\\', \\'' + s.key + '\\', this.checked)" style="width:auto;margin:0;accent-color:#38bdf8;" />' +
+            s.label + '</label>';
+        }).join('');
+        return '<div style="margin-top:4px;position:relative;">' +
           '<span style="font-size:10px;color:#64748b;margin-right:4px">Alerts:</span>' +
-          stages.map(function(s) {
-            var isOn = a[s.key] !== false;
-            return '<button type="button" class="stage-pill ' + (isOn ? 'on' : '') + '" onclick="toggleStageAlert(\\'' + w.flight_key + '\\', \\'' + s.key + '\\', ' + (!isOn) + ')">' +
-              (isOn ? '🔔 ' : '') + s.label + '</button>';
-          }).join('') +
+          '<button type="button" class="stage-pill ' + (allOn ? 'on' : '') + '" onclick="toggleAllAlerts(\\'' + w.flight_key + '\\', ' + (!allOn) + ')">' + (allOn ? '🔔 ' : '') + 'ALL</button>' +
+          '<button type="button" class="stage-pill ' + (!allOn && onCount > 0 ? 'on' : '') + '" onclick="toggleAlertMenu(\\'' + w.flight_key + '\\')">' + customLabel + '</button>' +
+          '<div id="alert-menu-' + w.flight_key + '" style="display:none;flex-wrap:wrap;gap:8px;margin-top:5px;padding:6px 8px;border-radius:7px;background:rgba(15,23,42,0.92);border:1px solid rgba(56,189,248,0.35);">' +
+            checkboxes +
+          '</div>' +
         '</div>';
       }
       function renderInboundCell(w) {
