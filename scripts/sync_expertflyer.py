@@ -661,18 +661,24 @@ def main() -> int:
                     due, reason = True, "manual Refresh EF"
                 else:
                     age_mins = 9999.0
+                    closed_out = False
                     try:
                         hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
                         snaps = hist.get("snapshots") or []
                         ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
                         if ef_snaps:
+                            last_note = str(ef_snaps[-1].get("raw_note") or "")
+                            if "(preserved " in last_note or (hrs <= 1.5 and "unavailable" in last_note.lower()):
+                                closed_out = True
                             last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
                             if not last_ts.endswith("Z") and "+" not in last_ts:
                                 last_ts += "+00:00"
                             age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
                     except Exception:
                         pass
-                    if age_mins >= 9000.0:
+                    if closed_out:
+                        due, reason = False, "seatmap closed"
+                    elif age_mins >= 9000.0:
                         due, reason = True, "initial ExpertFlyer sync"
                     elif hrs <= 2.0:
                         due, reason = (age_mins >= 4.5), "T-2h high-freq window (5m)"

@@ -107,36 +107,6 @@ export async function fetchDuffelCandidates(params: {
           const carrier = (seg.operating_carrier?.iata_code || seg.marketing_carrier?.iata_code || "").toUpperCase();
           const cabins = emptyCabins();
           const flightKey = buildFlightKey(carrier, flightNum, origin, destination, date);
-
-          if (!skipSeatmapKeys?.has(flightKey)) {
-            const seatRes = await fetch(`${DUFFEL_BASE}/air/seat_maps?offer_id=${encodeURIComponent(offer.id)}`, {
-              headers,
-            });
-            if (seatRes.ok) {
-              const seatJson = (await seatRes.json()) as { data?: any[] };
-              for (const seatMap of seatJson.data ?? []) {
-                for (const cabin of seatMap.cabins ?? []) {
-                  const key = mapCabinClass(cabin.cabin_class);
-                  for (const row of cabin.rows ?? []) {
-                    for (const section of row.sections ?? []) {
-                      for (const el of section.elements ?? []) {
-                        if (el.type !== "seat") continue;
-                        cabins[key].total += 1;
-                        if (Array.isArray(el.available_services) && el.available_services.length > 0) {
-                          cabins[key].available += 1;
-                        } else if (el.disclosures?.includes("blocked")) {
-                          cabins[key].blocked += 1;
-                        } else {
-                          cabins[key].occupied += 1;
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-
           const depAt = String(seg.departing_at || "");
           const arrAt = String(seg.arriving_at || "");
 
