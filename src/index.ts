@@ -749,7 +749,7 @@ export default {
         }
       }
 
-      let mergedSeatmap = body.seatmap;
+      let mergedSeatmap: any = body.seatmap;
       if (mergedSeatmap && Array.isArray(mergedSeatmap.sections) && prevSeatmapRow?.seatmap_json) {
         try {
           const prevSm = JSON.parse(prevSeatmapRow.seatmap_json) as { sections?: Array<{ cabin?: string; rows?: unknown[] }> };
