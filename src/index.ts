@@ -729,23 +729,38 @@ export default {
           );
           if (inbound) {
             const isDelayed = inbound.delayMins >= 15;
+            const delayBucket = Math.floor(inbound.delayMins / 15) * 15;
             const stageKey =
               inbound.stage === "cancelled"
                 ? "cancelled"
                 : inbound.stage === "landed"
                   ? "landed"
                   : inbound.stage === "enroute"
-                    ? (isDelayed ? "enroute_delayed" : "enroute")
-                    : (isDelayed ? "etd_delayed" : "etd");
+                    ? (isDelayed ? `enroute_delayed_${delayBucket}` : "enroute")
+                    : (isDelayed ? `etd_delayed_${delayBucket}` : "etd");
 
             if (w.last_inbound_stage !== stageKey) {
+              const prev = w.last_inbound_stage || "";
+              const prevMatch = prev.match(/^(etd|enroute)_delayed_(\d+)$/);
+              const prevBucket = prevMatch ? Number(prevMatch[2]) : null;
+              const isLegacySameStage =
+                (prev === "etd_delayed" && stageKey.startsWith("etd_delayed_")) ||
+                (prev === "enroute_delayed" && stageKey.startsWith("enroute_delayed_"));
+              const isDelayReduced =
+                prevBucket !== null &&
+                ((prevMatch?.[1] === "etd" && stageKey.startsWith("etd_delayed_")) ||
+                  (prevMatch?.[1] === "enroute" && stageKey.startsWith("enroute_delayed_"))) &&
+                delayBucket <= prevBucket;
+
               const alerts = parseAlertStages(w.alert_stages);
               const shouldAlert =
-                (stageKey === "cancelled" && alerts.disruption) ||
-                (stageKey.endsWith("_delayed") && alerts.disruption) ||
-                (stageKey === "landed" && alerts.landed) ||
-                (stageKey === "enroute" && alerts.enroute) ||
-                (stageKey === "etd" && alerts.etd);
+                !isLegacySameStage &&
+                !isDelayReduced &&
+                ((stageKey === "cancelled" && alerts.disruption) ||
+                  (stageKey.includes("_delayed") && alerts.disruption) ||
+                  (stageKey === "landed" && alerts.landed) ||
+                  (stageKey === "enroute" && alerts.enroute) ||
+                  (stageKey === "etd" && alerts.etd));
 
               if (shouldAlert && w.last_inbound_stage) {
                 const label =
@@ -753,12 +768,12 @@ export default {
                     ? "CANCELLED"
                     : stageKey === "landed"
                       ? "LANDED"
-                      : stageKey === "enroute_delayed"
+                      : stageKey.startsWith("enroute_delayed")
                         ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
                         : stageKey === "enroute"
                           ? "ENROUTE (ON TIME)"
-                          : stageKey === "etd_delayed"
-                            ? `ETD DELAYED (+${inbound.delayMins}m)`
+                          : stageKey.startsWith("etd_delayed")
+                            ? (prevBucket !== null ? `FURTHER DELAY (+${inbound.delayMins}m)` : `ETD DELAYED (+${inbound.delayMins}m)`)
                             : "ETD SCHEDULED";
                 await sendStagePushAlert(env, ntfyTopic, w, inbound, label);
               }
