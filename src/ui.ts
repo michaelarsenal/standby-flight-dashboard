@@ -415,8 +415,11 @@ export function renderHtml(): string {
           if (!s || s.total === 0) {
             return '<div class="cabin-box"><div class="cabin-name"><span>' + label + '</span><span>—</span></div><div class="cabin-nums">Not fitted</div></div>';
           }
+          const openLabel = (s.available === 0 && s.blocked > 0)
+            ? s.available + ' open (' + s.blocked + ' blk)'
+            : s.available + ' open';
           return '<div class="cabin-box ' + (key === targetCabin ? 'target' : '') + '">' +
-            '<div class="cabin-name"><span>' + label + '</span><strong>' + s.available + ' open</strong></div>' +
+            '<div class="cabin-name"><span>' + label + '</span><strong>' + openLabel + '</strong></div>' +
             '<div class="cabin-nums">' + s.occupied + ' occupied · ' + s.blocked + ' blocked (X)</div>' +
           '</div>';
         }).join("");
@@ -545,14 +548,15 @@ export function renderHtml(): string {
         document.getElementById("historyBody").innerHTML = '<p class="subtitle">No snapshots recorded yet. The Cron poller records seat counts every 30 minutes.</p>';
         return;
       }
+      const fmtCab = (op, occ, blk) => blk > 0 && op === 0 ? `${op} <span style="opacity:.7">(+${blk}b, ${occ}occ)</span>` : `${op} <span style="opacity:.7">(${occ}occ)</span>`;
       document.getElementById("historyBody").innerHTML = '<table><thead><tr><th>Time (UTC)</th><th>T-hrs</th><th>F</th><th>J</th><th>W</th><th>Y</th><th>Score</th></tr></thead><tbody>' +
-        snaps.map(s => '<tr>' +
+        snaps.slice().reverse().map(s => '<tr>' +
           '<td>' + s.captured_at + '</td>' +
           '<td>' + (s.hours_to_departure != null ? s.hours_to_departure.toFixed(1) + 'h' : '—') + '</td>' +
-          '<td>' + s.first_open + '</td>' +
-          '<td>' + s.business_open + '</td>' +
-          '<td>' + s.prem_econ_open + '</td>' +
-          '<td>' + s.economy_open + '</td>' +
+          '<td>' + fmtCab(s.first_open, s.first_occupied, s.first_blocked) + '</td>' +
+          '<td>' + fmtCab(s.business_open, s.business_occupied, s.business_blocked) + '</td>' +
+          '<td>' + fmtCab(s.prem_econ_open, s.prem_econ_occupied, s.prem_econ_blocked) + '</td>' +
+          '<td>' + fmtCab(s.economy_open, s.economy_occupied, s.economy_blocked) + '</td>' +
           '<td>' + s.score + ' (' + s.status + ')</td>' +
         '</tr>').join("") +
       '</tbody></table>';

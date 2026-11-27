@@ -594,8 +594,10 @@ export default {
     const watches = await listWatches(env.DB);
     const today = new Date().toISOString().slice(0, 10);
 
+    const efMap = await getLatestExpertFlyerSnapshots(env.DB);
     for (const w of watches) {
       if (w.departure_date < today) continue;
+      if (efMap.has(w.flight_key)) continue;
 
       const result = await runFlightSearch({
         env,

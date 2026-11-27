@@ -436,15 +436,37 @@ def main() -> int:
     queries = []
     queued_keys: set[str] = set()
     for w in watches:
-        due, hrs, reason = is_watch_due(w)
-        if not due and hrs is not None and hrs >= -1.0 and hrs <= 336.0:
-            try:
-                hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
-                snaps = hist.get("snapshots") or []
-                if not any(str(s.get("raw_note") or "").startswith("ExpertFlyer") for s in snaps):
+        hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"))
+        due = False
+        reason = "invalid date"
+        if hrs is not None:
+            if hrs < -1.0:
+                due, reason = False, "departed"
+            elif hrs > 336.0:
+                due, reason = False, ">14d out"
+            else:
+                age_mins = 9999.0
+                try:
+                    hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
+                    snaps = hist.get("snapshots") or []
+                    ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+                    if ef_snaps:
+                        last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                        if not last_ts.endswith("Z") and "+" not in last_ts:
+                            last_ts += "+00:00"
+                        age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                except Exception:
+                    pass
+                if age_mins >= 9000.0:
                     due, reason = True, "initial ExpertFlyer sync"
-            except Exception:
-                pass
+                elif 0.9 <= hrs <= 1.6:
+                    due, reason = True, "pre-close window"
+                elif hrs < 0.9:
+                    due, reason = (age_mins >= 25.0), "post-close check"
+                elif hrs <= 24.0:
+                    due, reason = (age_mins >= 25.0), "T-24h check-in window"
+                else:
+                    due, reason = (age_mins >= 180.0), "standard 3h cadence"
         print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
         if not due:
             continue
