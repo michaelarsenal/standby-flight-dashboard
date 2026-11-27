@@ -1,4 +1,4 @@
-import type { RouteDisruption } from "../types.ts";
+import type { InboundFlightInfo, RouteDisruption } from "../types.ts";
 
 const AEROAPI_BASE = "https://aeroapi.flightaware.com/aeroapi";
 
@@ -113,7 +113,6 @@ export async function fetchAirportDelaySignal(
   return { riskPoints: 0, signal: null };
 }
 
-import type { InboundFlightInfo, RouteDisruption } from "../types.ts";
 
 export async function fetchInboundDetails(
   apiKey: string,
