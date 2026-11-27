@@ -65,6 +65,23 @@ export interface SearchQuery {
   targetCabin: CabinKey;
 }
 
+export interface InboundFlightInfo {
+  inboundFlight: string;
+  inboundIdent: string;
+  origin: string;
+  destination: string;
+  registration: string;
+  status: string;
+  scheduledArrival: string;
+  estimatedArrival: string;
+  delayMins: number;
+  turnaroundMins: number | null;
+  outboundImpact: "none" | "watch" | "high";
+  impactSummary: string;
+  flightRadarUrl: string;
+  flightAwareUrl: string;
+}
+
 export interface WatchedFlight {
   id: number;
   flight_key: string;
@@ -81,6 +98,7 @@ export interface WatchedFlight {
   last_score: number | null;
   created_at: string;
   updated_at: string;
+  inbound?: InboundFlightInfo | null;
 }
 
 export interface SeatSnapshot {

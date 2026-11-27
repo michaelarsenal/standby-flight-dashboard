@@ -113,43 +113,118 @@ export async function fetchAirportDelaySignal(
   return { riskPoints: 0, signal: null };
 }
 
-export async function fetchInboundAircraftSignal(
+import type { InboundFlightInfo, RouteDisruption } from "../types.ts";
+
+export async function fetchInboundDetails(
   apiKey: string,
-  flightNumber: string
-): Promise<{ riskPoints: number; signal: string | null }> {
+  flightNumber: string,
+  departureDate?: string,
+  departureTime?: string | null
+): Promise<InboundFlightInfo | null> {
   try {
     const res = await fetch(`${AEROAPI_BASE}/flights/${encodeURIComponent(flightNumber)}?max_pages=1`, {
       headers: { "x-apikey": apiKey, Accept: "application/json" },
     });
-    if (!res.ok) return { riskPoints: 0, signal: null };
+    if (!res.ok) return null;
     const data = (await res.json()) as { flights?: any[] };
-    const upcoming = (data.flights ?? [])[0];
-    if (!upcoming?.inbound_fa_flight_id) return { riskPoints: 0, signal: null };
+    const flights = data.flights ?? [];
+    if (flights.length === 0) return null;
+
+    // Pick flight matching departureDate if available, else the next upcoming leg
+    const upcoming =
+      (departureDate
+        ? flights.find((f) => String(f.scheduled_out || "").startsWith(departureDate))
+        : null) || flights[0];
+
+    if (!upcoming?.inbound_fa_flight_id) return null;
 
     const inRes = await fetch(
       `${AEROAPI_BASE}/flights/${encodeURIComponent(upcoming.inbound_fa_flight_id)}`,
       { headers: { "x-apikey": apiKey, Accept: "application/json" } }
     );
-    if (!inRes.ok) return { riskPoints: 0, signal: null };
+    if (!inRes.ok) return null;
     const inData = (await inRes.json()) as { flights?: any[] };
     const inbound = (inData.flights ?? [])[0];
-    if (!inbound) return { riskPoints: 0, signal: null };
+    if (!inbound) return null;
 
-    if (inbound.cancelled) {
-      return {
-        riskPoints: 28,
-        signal: `Inbound aircraft (${inbound.ident || "rotation"}) cancelled`,
-      };
-    }
+    const inboundFlight = String(inbound.ident_iata || inbound.ident || "Inbound").toUpperCase();
+    const inboundIdent = String(inbound.ident || inboundFlight).toUpperCase();
+    const origin = String(inbound.origin?.code_iata || inbound.origin?.code || "").toUpperCase();
+    const destination = String(inbound.destination?.code_iata || inbound.destination?.code || "").toUpperCase();
+    const registration = String(inbound.registration || "").toUpperCase();
+    const status = String(inbound.status || (inbound.cancelled ? "Cancelled" : "Scheduled"));
+    const scheduledArrival = String(inbound.scheduled_in || "");
+    const estimatedArrival = String(inbound.actual_in || inbound.estimated_in || inbound.scheduled_in || "");
     const delayMins = typeof inbound.arrival_delay === "number" ? Math.round(inbound.arrival_delay / 60) : 0;
-    if (delayMins >= 45) {
-      return {
-        riskPoints: delayMins >= 90 ? 20 : 12,
-        signal: `Inbound aircraft (${inbound.ident || "rotation"}) running ${delayMins}m late`,
-      };
+
+    const outIso = upcoming.scheduled_out || (departureDate ? `${departureDate}T${departureTime || "18:00"}:00Z` : "");
+    let turnaroundMins: number | null = null;
+    if (outIso && estimatedArrival) {
+      const outMs = new Date(outIso).getTime();
+      const inMs = new Date(estimatedArrival).getTime();
+      if (!Number.isNaN(outMs) && !Number.isNaN(inMs)) {
+        turnaroundMins = Math.round((outMs - inMs) / 60000);
+      }
     }
+
+    let outboundImpact: "none" | "watch" | "high" = "none";
+    let impactSummary = "";
+    if (inbound.cancelled) {
+      outboundImpact = "high";
+      impactSummary = "Inbound cancelled — likely outbound delay or aircraft swap";
+    } else if (turnaroundMins !== null && turnaroundMins < 55) {
+      outboundImpact = "high";
+      impactSummary = `Tight ${turnaroundMins}m turnaround — likely to delay outbound`;
+    } else if (delayMins >= 45) {
+      outboundImpact = "high";
+      impactSummary = `Running ${delayMins}m late — likely to affect outbound`;
+    } else if ((turnaroundMins !== null && turnaroundMins < 85) || delayMins >= 20) {
+      outboundImpact = "watch";
+      impactSummary = delayMins >= 20
+        ? `Running ${delayMins}m late${turnaroundMins !== null ? ` (${turnaroundMins}m turn)` : ""}`
+        : `Moderate ${turnaroundMins}m turnaround`;
+    } else {
+      outboundImpact = "none";
+      impactSummary = turnaroundMins !== null
+        ? `On time (${turnaroundMins}m turnaround) — no outbound impact`
+        : "On time — no outbound impact";
+    }
+
+    return {
+      inboundFlight,
+      inboundIdent,
+      origin,
+      destination,
+      registration,
+      status,
+      scheduledArrival,
+      estimatedArrival,
+      delayMins,
+      turnaroundMins,
+      outboundImpact,
+      impactSummary,
+      flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(inboundFlight)}`,
+      flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(inboundIdent)}`,
+    };
   } catch {
-    // Ignore
+    return null;
+  }
+}
+
+export async function fetchInboundAircraftSignal(
+  apiKey: string,
+  flightNumber: string
+): Promise<{ riskPoints: number; signal: string | null }> {
+  const info = await fetchInboundDetails(apiKey, flightNumber);
+  if (!info) return { riskPoints: 0, signal: null };
+  if (info.status.toLowerCase().includes("cancel")) {
+    return { riskPoints: 28, signal: `Inbound aircraft (${info.inboundFlight}) cancelled` };
+  }
+  if (info.delayMins >= 45) {
+    return {
+      riskPoints: info.delayMins >= 90 ? 20 : 12,
+      signal: `Inbound aircraft (${info.inboundFlight}) running ${info.delayMins}m late`,
+    };
   }
   return { riskPoints: 0, signal: null };
 }

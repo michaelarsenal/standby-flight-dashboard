@@ -550,12 +550,47 @@ export function renderHtml(): string {
         box.innerHTML = '<span class="subtitle">No flights watched yet. Click <strong>+ Watch Flight</strong> on any search result to track T-24h seat-fill velocity and receive alerts.</span>';
         return;
       }
-      box.innerHTML = '<table><thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+      function fmtUtcTime(iso) {
+        if (!iso) return '?';
+        var m = String(iso).match(/T(\d{2}:\d{2})/);
+        return m ? m[1] + 'Z' : String(iso);
+      }
+      function impactBadgeClass(impact) {
+        if (impact === 'high') return 'score-red';
+        if (impact === 'watch') return 'score-amber';
+        return 'score-green';
+      }
+      function renderInboundCell(w) {
+        var inb = w.inbound;
+        var fallbackFr24 = 'https://www.flightradar24.com/' + encodeURIComponent(w.flight_number || '');
+        if (!inb) {
+          return '<div style="font-size:12px;color:#64748b">Not yet assigned (check inside T-24h)</div>' +
+            '<div style="margin-top:3px"><a href="' + fallbackFr24 + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FR24 ↗</a></div>';
+        }
+        var routeTxt = (inb.origin || '?') + ' → ' + (inb.destination || '?');
+        var regTxt = inb.registration ? ' <span style="color:#94a3b8">(' + inb.registration + ')</span>' : '';
+        var estTxt = fmtUtcTime(inb.estimatedArrival || inb.scheduledArrival);
+        var schedTxt = fmtUtcTime(inb.scheduledArrival);
+        var delayTxt = inb.delayMins > 0 ? ' <span style="color:#f87171">(+' + inb.delayMins + 'm)</span>' : '';
+        var links = '';
+        if (inb.flightRadarUrl) {
+          links += '<a href="' + inb.flightRadarUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px">FR24 ↗</a>';
+        }
+        if (inb.flightAwareUrl) {
+          links += '<a href="' + inb.flightAwareUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FA ↗</a>';
+        }
+        return '<div style="font-size:12px"><strong>' + inb.inboundFlight + '</strong> ' + routeTxt + regTxt + '</div>' +
+          '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">Est ' + estTxt + ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' + delayTxt + '</div>' +
+          '<div style="margin-top:3px"><span class="score-badge ' + impactBadgeClass(inb.outboundImpact) + '" style="font-size:10px;padding:2px 6px">' + (inb.impactSummary || 'No impact') + '</span></div>' +
+          (links ? '<div style="margin-top:3px">' + links + '</div>' : '');
+      }
+      box.innerHTML = '<table><thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Inbound Aircraft</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
         watches.map(w => '<tr>' +
           '<td><strong>' + w.flight_number + '</strong></td>' +
           '<td>' + w.origin + ' → ' + w.destination + '</td>' +
           '<td>' + w.departure_date + ' ' + (w.departure_time || '') + '</td>' +
           '<td>' + w.target_cabin + '</td>' +
+          '<td>' + renderInboundCell(w) + '</td>' +
           '<td><span class="score-badge ' + badgeClass(w.last_status) + '">' + (w.last_status || 'pending').toUpperCase() + ' (' + (w.last_score ?? '?') + ')</span></td>' +
           '<td><button class="btn-ghost" onclick="openSeatmap(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">Seat Map</button> ' +
           '<button class="btn-ghost" onclick="openHistory(\\'' + w.flight_key + '\\', \\'' + w.flight_number + '\\')">History</button> ' +

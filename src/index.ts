@@ -20,6 +20,7 @@ import {
   fetchAirportDelaySignal,
   fetchFlightAwareDisruptions,
   fetchInboundAircraftSignal,
+  fetchInboundDetails,
 } from "./providers/flightaware.ts";
 import { fetchAirportWeatherRisk } from "./providers/weather.ts";
 import {
@@ -405,6 +406,26 @@ export default {
     if (path === "/api/watches" && request.method === "GET") {
       if (!env.DB) return jsonResponse({ watches: [] });
       const watches = await listWatches(env.DB);
+      if (env.FLIGHTAWARE_API_KEY && watches.length > 0) {
+        const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+        const enriched = await Promise.all(
+          watches.map(async (w) => {
+            if (w.departure_date < cutoff) return w;
+            try {
+              const inbound = await fetchInboundDetails(
+                env.FLIGHTAWARE_API_KEY!,
+                w.flight_number,
+                w.departure_date,
+                w.departure_time,
+              );
+              return { ...w, inbound };
+            } catch {
+              return w;
+            }
+          }),
+        );
+        return jsonResponse({ watches: enriched });
+      }
       return jsonResponse({ watches });
     }
 
