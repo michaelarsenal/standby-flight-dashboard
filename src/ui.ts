@@ -378,7 +378,10 @@ export function renderHtml(): string {
     <div class="card" style="margin-top: 22px;">
       <div class="section-title">
         <span>Watched Flights (T-24h Polling &amp; Alerts)</span>
-        <button class="btn-ghost" onclick="loadWatches()">Refresh</button>
+        <div style="display:flex;gap:6px;align-items:center;">
+          <button id="efRefreshBtn" class="btn-ghost" onclick="triggerEfSync()" title="Trigger immediate ExpertFlyer seat map sync">Refresh EF</button>
+          <button class="btn-ghost" onclick="loadWatches()">Refresh</button>
+        </div>
       </div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:12px;">
         <div>
@@ -806,6 +809,28 @@ export function renderHtml(): string {
       var el = document.getElementById("alert-menu-" + flightKey);
       if (!el) return;
       el.style.display = (el.style.display === "none" || !el.style.display) ? "flex" : "none";
+    }
+
+    async function triggerEfSync() {
+      var btn = document.getElementById("efRefreshBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "Syncing EF..."; }
+      try {
+        var res = await fetch("/api/expertflyer/trigger", { method: "POST" });
+        var data = await res.json();
+        if (res.ok && data.ok) {
+          alert(data.message || "ExpertFlyer sync triggered! Seat maps will refresh in ~1-2 minutes.");
+        } else if (data.fallbackUrl) {
+          if (confirm((data.error || "GitHub token not set on Worker.") + "\n\nOpen GitHub Actions to click Run workflow manually?")) {
+            window.open(data.fallbackUrl, "_blank", "noopener,noreferrer");
+          }
+        } else {
+          alert(data.error || "Failed to trigger ExpertFlyer sync");
+        }
+      } catch (e) {
+        alert("Failed to trigger ExpertFlyer sync");
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Refresh EF"; }
+      }
     }
 
     async function loadWatches() {

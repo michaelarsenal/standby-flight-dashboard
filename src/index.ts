@@ -813,6 +813,38 @@ export default {
       });
     }
 
+    if (path === "/api/expertflyer/trigger" && request.method === "POST") {
+      if (!env.GITHUB_TOKEN) {
+        return jsonResponse({
+          ok: false,
+          fallbackUrl: "https://github.com/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml",
+          error: "Add GITHUB_TOKEN (Actions: Read & Write) to Cloudflare Worker Secrets to enable 1-click EF dispatch.",
+        }, 400);
+      }
+      const ghRes = await fetch(
+        "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "standby-flight-dashboard-worker",
+          },
+          body: JSON.stringify({ ref: "main" }),
+        }
+      );
+      if (!ghRes.ok) {
+        const errTxt = await ghRes.text();
+        return jsonResponse({
+          ok: false,
+          fallbackUrl: "https://github.com/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml",
+          error: `GitHub dispatch failed (${ghRes.status}): ${errTxt.slice(0, 120)}`,
+        }, 502);
+      }
+      if (env.DB) await setSetting(env.DB, "last_ef_dispatch", String(Date.now()));
+      return jsonResponse({ ok: true, message: "ExpertFlyer sync workflow dispatched — seat maps will update in ~1–2 minutes." });
+    }
+
     if (path === "/api/expertflyer/flights" && request.method === "POST") {
       if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
       const body = (await request.json()) as {
@@ -851,6 +883,42 @@ export default {
     const runDuffelPoll = utcMin === 0 || utcMin === 30;
 
     const efMap = await getLatestExpertFlyerSnapshots(env.DB);
+    if (env.GITHUB_TOKEN && watches.length > 0) {
+      const lastDispatchMs = Number((await getSetting(env.DB, "last_ef_dispatch")) || "0");
+      if (Date.now() - lastDispatchMs >= 4 * 60_000) {
+        const anyDue = watches.some((w) => {
+          if (w.departure_date < cutoff || w.archived) return false;
+          const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
+          if (hrs === null || hrs < -6 || hrs > 336) return false;
+          const snap = efMap.get(w.flight_key);
+          const ageMins = snap?.captured_at
+            ? (Date.now() - new Date(snap.captured_at.replace(" ", "T") + "Z").getTime()) / 60_000
+            : 9999;
+          if (hrs <= 2) return ageMins >= 5;
+          if (hrs <= 24) return ageMins >= 15;
+          return ageMins >= 180;
+        });
+        if (anyDue) {
+          try {
+            const ghRes = await fetch(
+              "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+                  Accept: "application/vnd.github+json",
+                  "User-Agent": "standby-flight-dashboard-worker",
+                },
+                body: JSON.stringify({ ref: "main" }),
+              }
+            );
+            if (ghRes.ok) {
+              await setSetting(env.DB, "last_ef_dispatch", String(Date.now()));
+            }
+          } catch {}
+        }
+      }
+    }
     for (const w of watches) {
       if (w.departure_date < cutoff || w.archived) continue;
 

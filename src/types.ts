@@ -222,4 +222,5 @@ export interface Env {
   ALERT_EMAIL_TO?: string;
   ALERT_EMAIL_FROM?: string;
   NTFY_TOPIC?: string;
+  GITHUB_TOKEN?: string;
 }
