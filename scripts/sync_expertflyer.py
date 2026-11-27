@@ -425,7 +425,10 @@ def run_sync_session(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_url("**/air/availability**", wait_until="commit", timeout=25000)
+        for _ in range(25):
+            if "/sign-in" not in page.url:
+                break
+            page.wait_for_timeout(1000)
         page.wait_for_timeout(2000)
 
         for q in avail_queries:
