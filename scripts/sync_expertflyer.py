@@ -620,20 +620,32 @@ def main() -> int:
         print(json.dumps(res, indent=2))
         return 0
 
-    # Sync ExpertFlyer Flight Availability for default routes (today & tomorrow) + any watched routes
+    # Sync ExpertFlyer Flight Availability for targeted search route OR default routes + watched routes
     from datetime import timedelta
-    today_dt = datetime.now(timezone.utc)
-    avail_pairs = set()
-    for off in (0, 1):
-        d_str = (today_dt + timedelta(days=off)).strftime("%Y-%m-%d")
-        avail_pairs.add(("WAS", "LHR", d_str))
-        avail_pairs.add(("LHR", "WAS", d_str))
+    ef_origins = [x.strip().upper() for x in os.environ.get("EF_ORIGINS", "").split(",") if x.strip()]
+    ef_dests = [x.strip().upper() for x in os.environ.get("EF_DESTINATIONS", "").split(",") if x.strip()]
+    ef_date = os.environ.get("EF_DATE", "").strip()
+    targeted_route = bool(ef_origins and ef_dests and ef_date)
 
     watches_resp = http_json(f"{args.worker_url.rstrip('/')}/api/watches")
     watches = watches_resp.get("watches") or []
-    for w in watches:
-        if w.get("origin") and w.get("destination") and w.get("departure_date"):
-            avail_pairs.add((str(w["origin"]).upper(), str(w["destination"]).upper(), str(w["departure_date"])))
+
+    avail_pairs = set()
+    if targeted_route:
+        for o in ef_origins:
+            for d in ef_dests:
+                if o != d:
+                    avail_pairs.add((o, d, ef_date))
+        print(f"[targeted] syncing {len(avail_pairs)} route pair(s) for {ef_date}")
+    else:
+        today_dt = datetime.now(timezone.utc)
+        for off in (0, 1):
+            d_str = (today_dt + timedelta(days=off)).strftime("%Y-%m-%d")
+            avail_pairs.add(("WAS", "LHR", d_str))
+            avail_pairs.add(("LHR", "WAS", d_str))
+        for w in watches:
+            if w.get("origin") and w.get("destination") and w.get("departure_date"):
+                avail_pairs.add((str(w["origin"]).upper(), str(w["destination"]).upper(), str(w["departure_date"])))
 
     avail_queries = [{"origin": o, "destination": d, "departure_date": dt} for (o, d, dt) in sorted(avail_pairs)]
 
@@ -648,7 +660,7 @@ def main() -> int:
         force_sync = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
         queries: list[dict[str, Any]] = []
         queued_keys: set[str] = set()
-        for w in watches:
+        for w in ([] if targeted_route else watches):
             hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"), w.get("origin"))
             due = False
             reason = "invalid date"
@@ -713,21 +725,22 @@ def main() -> int:
             if fk in queued_keys:
                 continue
             hrs = hours_until_departure(af["departure_date"], af.get("departure_time"), af.get("origin"))
-            if hrs is None or hrs < 0.8 or hrs > 48.0:
+            if hrs is None or hrs < 0.8 or hrs > (336.0 if targeted_route else 48.0):
                 continue
-            try:
-                hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(fk, safe='')}")
-                snaps = hist.get("snapshots") or []
-                ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
-                if ef_snaps:
-                    last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
-                    if not last_ts.endswith("Z") and "+" not in last_ts:
-                        last_ts += "+00:00"
-                    age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
-                    if age_mins < 30.0:
-                        continue
-            except Exception:
-                pass
+            if not targeted_route:
+                try:
+                    hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(fk, safe='')}")
+                    snaps = hist.get("snapshots") or []
+                    ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+                    if ef_snaps:
+                        last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                        if not last_ts.endswith("Z") and "+" not in last_ts:
+                            last_ts += "+00:00"
+                        age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                        if age_mins < 30.0:
+                            continue
+                except Exception:
+                    pass
             queued_keys.add(fk)
             digits = re.sub(r"^[A-Z0-9]{2}", "", af["flight_number"].upper())
             queries.append(

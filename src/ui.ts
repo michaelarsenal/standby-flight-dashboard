@@ -372,6 +372,7 @@ export function renderHtml(): string {
         <span id="resultsHeading">Search Results</span>
         <span id="resultsMeta" class="subtitle"></span>
       </div>
+      <div id="searchProgress" style="display:none;margin-bottom:10px;"></div>
       <div id="resultsList" class="flight-list"></div>
     </div>
 
@@ -533,8 +534,126 @@ export function renderHtml(): string {
       return level === "green" ? "LOOKING GOOD" : level === "red" ? "TIGHT" : "CAUTION";
     }
 
+    let efPollTimer = null;
+
+    function saveSearchState(metaText) {
+      try {
+        localStorage.setItem("standby_last_search_inputs", JSON.stringify({
+          origins: document.getElementById("origins").value,
+          destinations: document.getElementById("destinations").value,
+          date: document.getElementById("date").value,
+          airlines: document.getElementById("airlines").value,
+          targetCabin: document.getElementById("targetCabin").value
+        }));
+        localStorage.setItem("standby_last_search_data", JSON.stringify({
+          candidates: latestCandidates,
+          metaText: metaText || document.getElementById("resultsMeta").textContent || "",
+          date: document.getElementById("date").value,
+          targetCabin: document.getElementById("targetCabin").value
+        }));
+      } catch (e) {}
+    }
+
+    function renderSearchProgress(steps) {
+      const el = document.getElementById("searchProgress");
+      if (!el) return;
+      if (!steps || steps.length === 0) {
+        el.style.display = "none";
+        el.innerHTML = "";
+        return;
+      }
+      el.style.display = "block";
+      el.innerHTML = '<div class="card" style="padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:12px;border-color:rgba(56,189,248,0.35);background:rgba(15,23,42,0.72);">' +
+        steps.map(function(st) {
+          var icon = st.done ? '<span style="color:#4ade80;font-weight:700">✓</span>' : '<span style="color:#38bdf8;font-weight:700">⟳</span>';
+          var col = st.done ? '#cbd5e1' : '#7dd3fc';
+          return '<span style="color:' + col + '">' + icon + ' ' + st.label + '</span>';
+        }).join('') +
+      '</div>';
+    }
+
+    function updateProgressFromCandidates(isPolling, pollCount) {
+      const total = latestCandidates.length;
+      if (total === 0) {
+        renderSearchProgress([]);
+        return false;
+      }
+      const bucketsDone = latestCandidates.filter(function(c) { return Boolean(c.fareBuckets); }).length;
+      const seatsDone = latestCandidates.filter(function(c) { return c.cabins && (c.cabins.economy.total > 0 || c.cabins.business.total > 0); }).length;
+      const allDone = bucketsDone === total && seatsDone === total;
+
+      const steps = [
+        { done: true, label: "Schedule & weather — done" },
+        { done: true, label: "FlightAware delays & links — done" },
+        { done: bucketsDone === total, label: bucketsDone === total ? "EF fare buckets — done (" + bucketsDone + "/" + total + ")" : (isPolling ? "Syncing EF fare buckets (" + bucketsDone + "/" + total + ")..." : "EF fare buckets (" + bucketsDone + "/" + total + ")") },
+        { done: seatsDone === total, label: seatsDone === total ? "EF seat maps — done (" + seatsDone + "/" + total + ")" : (isPolling ? "Syncing EF seat maps (" + seatsDone + "/" + total + ")..." : "EF seat maps (" + seatsDone + "/" + total + ")") }
+      ];
+      if (!allDone && !isPolling && pollCount >= 24) {
+        steps.push({ done: true, label: "Background sync still running — click Refresh later if needed" });
+      }
+      renderSearchProgress(steps);
+      return allDone;
+    }
+
+    function startEfPolling(date, targetCabin) {
+      if (efPollTimer) {
+        clearInterval(efPollTimer);
+        efPollTimer = null;
+      }
+      if (updateProgressFromCandidates(true, 0)) return;
+      let pollCount = 0;
+      efPollTimer = setInterval(async function() {
+        pollCount++;
+        const keys = latestCandidates.map(function(c) { return c.flightKey; }).filter(Boolean);
+        if (keys.length === 0 || pollCount > 24) {
+          clearInterval(efPollTimer);
+          efPollTimer = null;
+          updateProgressFromCandidates(false, pollCount);
+          return;
+        }
+        try {
+          const qs = new URLSearchParams({ keys: keys.join(","), date: date, targetCabin: targetCabin });
+          const res = await fetch("/api/ef-status?" + qs.toString());
+          if (!res.ok) return;
+          const data = await res.json();
+          const items = data.items || {};
+          let changed = false;
+          latestCandidates = latestCandidates.map(function(c) {
+            const upd = items[c.flightKey];
+            if (!upd) return c;
+            const next = Object.assign({}, c);
+            if (upd.fareBuckets && !c.fareBuckets) {
+              next.fareBuckets = upd.fareBuckets;
+              changed = true;
+            }
+            if (upd.hasSeatmap && upd.cabins && c.cabins.economy.total === 0 && c.cabins.business.total === 0) {
+              next.cabins = upd.cabins;
+              next.economyComfort = upd.economyComfort;
+              if (upd.standbyScore !== null) next.standbyScore = upd.standbyScore;
+              if (upd.readiness) next.readiness = upd.readiness;
+              if (upd.reasons) next.reasons = upd.reasons;
+              changed = true;
+            }
+            return next;
+          });
+          if (changed) {
+            renderCandidates(targetCabin);
+            saveSearchState();
+          }
+          if (updateProgressFromCandidates(true, pollCount)) {
+            clearInterval(efPollTimer);
+            efPollTimer = null;
+          }
+        } catch (e) {}
+      }, 5000);
+    }
+
     async function runSearch(e) {
       if (e) e.preventDefault();
+      if (efPollTimer) {
+        clearInterval(efPollTimer);
+        efPollTimer = null;
+      }
       const origins = document.getElementById("origins").value;
       const destinations = document.getElementById("destinations").value;
       const date = document.getElementById("date").value;
@@ -542,6 +661,10 @@ export function renderHtml(): string {
       const targetCabin = document.getElementById("targetCabin").value;
 
       document.getElementById("resultsSection").style.display = "block";
+      renderSearchProgress([
+        { done: false, label: "Querying flight schedule & weather..." },
+        { done: false, label: "Querying FlightAware delays & links..." }
+      ]);
       document.getElementById("resultsList").innerHTML = '<div class="card subtitle">Querying flights, seat maps, and live route status for ' + date + '...</div>';
 
       const qs = new URLSearchParams({ origins, destinations, date, airlines, targetCabin });
@@ -567,10 +690,12 @@ export function renderHtml(): string {
       }
 
       latestCandidates = data.candidates || [];
-      document.getElementById("resultsMeta").textContent =
-        latestCandidates.length + " flight(s) across " + (data.expandedOrigins || []).join(", ") + " → " + (data.expandedDestinations || []).join(", ");
+      const metaText = latestCandidates.length + " flight(s) across " + (data.expandedOrigins || []).join(", ") + " → " + (data.expandedDestinations || []).join(", ");
+      document.getElementById("resultsMeta").textContent = metaText;
 
       renderCandidates(targetCabin);
+      saveSearchState(metaText);
+      startEfPolling(date, targetCabin);
     }
 
     function renderCandidates(targetCabin) {
@@ -1418,7 +1543,33 @@ export function renderHtml(): string {
       } catch {}
     }
 
+    function restoreSearchState() {
+      try {
+        const savedInputs = localStorage.getItem("standby_last_search_inputs");
+        if (savedInputs) {
+          const inp = JSON.parse(savedInputs);
+          if (inp.origins) document.getElementById("origins").value = inp.origins;
+          if (inp.destinations) document.getElementById("destinations").value = inp.destinations;
+          if (inp.date) document.getElementById("date").value = inp.date;
+          if (inp.airlines) document.getElementById("airlines").value = inp.airlines;
+          if (inp.targetCabin) document.getElementById("targetCabin").value = inp.targetCabin;
+        }
+        const savedData = localStorage.getItem("standby_last_search_data");
+        if (savedData) {
+          const sd = JSON.parse(savedData);
+          if (Array.isArray(sd.candidates) && sd.candidates.length > 0) {
+            latestCandidates = sd.candidates;
+            document.getElementById("resultsSection").style.display = "block";
+            document.getElementById("resultsMeta").textContent = sd.metaText || (sd.candidates.length + " flight(s)");
+            renderCandidates(sd.targetCabin || "economy");
+            startEfPolling(sd.date || document.getElementById("date").value, sd.targetCabin || "economy");
+          }
+        }
+      } catch (e) {}
+    }
+
     document.getElementById("searchForm").addEventListener("submit", runSearch);
+    restoreSearchState();
     checkMode();
     loadWatches();
     setInterval(function() {

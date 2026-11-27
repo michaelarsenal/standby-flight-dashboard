@@ -5,6 +5,19 @@ on:
     # Runs every 5 minutes; script throttles to 15m normally and 5m inside T-2h
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      origins:
+        description: "Optional comma-separated origin IATA codes"
+        required: false
+        default: ""
+      destinations:
+        description: "Optional comma-separated destination IATA codes"
+        required: false
+        default: ""
+      date:
+        description: "Optional YYYY-MM-DD departure date"
+        required: false
+        default: ""
 
 jobs:
   sync:
@@ -28,4 +41,7 @@ jobs:
           EXPERTFLYER_EMAIL: ${{ secrets.EXPERTFLYER_EMAIL }}
           EXPERTFLYER_PASSWORD: ${{ secrets.EXPERTFLYER_PASSWORD }}
           STANDBY_WORKER_URL: https://standby-flight-dashboard.michaelborland71.workers.dev
+          EF_ORIGINS: ${{ github.event.inputs.origins }}
+          EF_DESTINATIONS: ${{ github.event.inputs.destinations }}
+          EF_DATE: ${{ github.event.inputs.date }}
         run: python3 scripts/sync_expertflyer.py

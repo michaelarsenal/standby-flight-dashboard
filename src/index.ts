@@ -404,7 +404,109 @@ export default {
         airlinesRaw,
         targetCabin,
       });
-      return jsonResponse(result);
+
+      let efSyncTriggered = false;
+      const missingEf = result.candidates.some(
+        (c) => (c.cabins.economy.total === 0 && c.cabins.business.total === 0) || !c.fareBuckets
+      );
+      if (missingEf && env.GITHUB_TOKEN && env.DB && result.mode === "live" && result.candidates.length > 0) {
+        const dispatchKey = `auto_ef_dispatch:${result.expandedOrigins.join(",")}:${result.expandedDestinations.join(",")}:${date}`;
+        const lastRaw = await getSetting(env.DB, dispatchKey);
+        const lastMs = lastRaw ? Number(lastRaw) : 0;
+        if (!lastMs || Date.now() - lastMs > 120_000) {
+          try {
+            const ghRes = await fetch(
+              "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+                  Accept: "application/vnd.github+json",
+                  "User-Agent": "standby-flight-dashboard-worker",
+                },
+                body: JSON.stringify({
+                  ref: "main",
+                  inputs: {
+                    origins: result.expandedOrigins.join(","),
+                    destinations: result.expandedDestinations.join(","),
+                    date,
+                  },
+                }),
+              }
+            );
+            if (ghRes.ok) {
+              efSyncTriggered = true;
+              await setSetting(env.DB, dispatchKey, String(Date.now()));
+            }
+          } catch {}
+        } else {
+          efSyncTriggered = true;
+        }
+      }
+
+      return jsonResponse({ ...result, efSyncTriggered });
+    }
+
+    if (path === "/api/ef-status" && request.method === "GET") {
+      if (!env.DB) return jsonResponse({ items: {} });
+      const keysParam = url.searchParams.get("keys") || "";
+      const date = url.searchParams.get("date") || "";
+      const targetCabin = (url.searchParams.get("targetCabin") || "economy") as CabinKey;
+      const keys = keysParam.split(",").map((k) => k.trim()).filter(Boolean);
+      if (keys.length === 0) return jsonResponse({ items: {} });
+
+      const [efFlights, efSnapshots, seatmapMap] = await Promise.all([
+        date ? listEfFlights(env.DB, date) : Promise.resolve([]),
+        getLatestExpertFlyerSnapshots(env.DB),
+        getEfSeatmapsByKeys(env.DB, keys),
+      ]);
+      const efFlightByKey = new Map(efFlights.map((f) => [f.flight_key, f]));
+      const items: Record<string, any> = {};
+
+      for (const fk of keys) {
+        const efFlight = efFlightByKey.get(fk);
+        const snap = efSnapshots.get(fk);
+        const smJson = seatmapMap.get(fk);
+        const parts = fk.split("-");
+        const airline = efFlight?.airline || parts[0]?.slice(0, 2) || "";
+        const fareBuckets = efFlight?.ef_buckets ? parseFareBuckets(efFlight.ef_buckets, airline) : null;
+        let cabins: Record<CabinKey, CabinSeatSummary> | null = null;
+        if (snap) {
+          cabins = {
+            first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
+            business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
+            prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
+            economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
+          };
+        }
+        const economyComfort = computeEconomySeatStats(smJson);
+        const hasSeatmap = Boolean(cabins && (cabins.economy.total > 0 || cabins.business.total > 0));
+        let scored: { score: number; readiness: string; reasons: string[] } | null = null;
+        if (cabins) {
+          const depDate = efFlight?.departure_date || parts.slice(-3).join("-");
+          const depTime = efFlight?.departure_time || "18:00";
+          const hrs = hoursUntilDeparture(depDate, depTime);
+          scored = computeStandbyScore({
+            cabins,
+            targetCabin,
+            fareBuckets,
+            disruptions: [],
+            hoursToDeparture: hrs,
+          });
+        }
+        items[fk] = {
+          hasEfBuckets: Boolean(fareBuckets),
+          hasSeatmap,
+          fareBuckets,
+          cabins,
+          economyComfort,
+          standbyScore: scored?.score ?? null,
+          readiness: scored?.readiness ?? null,
+          reasons: snap && scored ? [`ExpertFlyer seat map (${snap.captured_at.slice(0, 16)}Z)`, ...scored.reasons] : null,
+          lastSeatmapAt: snap?.captured_at || null,
+        };
+      }
+      return jsonResponse({ items });
     }
 
     if (path === "/api/score" && request.method === "POST") {
