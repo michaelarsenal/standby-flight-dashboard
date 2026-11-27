@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
 
@@ -22,6 +23,16 @@ CABIN_MAP = {
     "C": "business",
     "W": "prem_econ",
     "Y": "economy",
+}
+AIRPORT_TZ = {
+    "IAD": "America/New_York", "DCA": "America/New_York", "BWI": "America/New_York",
+    "JFK": "America/New_York", "EWR": "America/New_York", "BOS": "America/New_York",
+    "MIA": "America/New_York", "ATL": "America/New_York", "CLT": "America/New_York",
+    "PHL": "America/New_York", "ORD": "America/Chicago", "DFW": "America/Chicago",
+    "IAH": "America/Chicago", "DEN": "America/Denver", "LAX": "America/Los_Angeles",
+    "SFO": "America/Los_Angeles", "SEA": "America/Los_Angeles",
+    "LHR": "Europe/London", "LGW": "Europe/London", "MAN": "Europe/London",
+    "EDI": "Europe/London", "DUB": "Europe/Dublin",
 }
 
 
@@ -35,15 +46,17 @@ def http_json(url: str, payload: dict[str, Any] | None = None) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def hours_until_departure(dep_date: str, dep_time: str | None) -> float | None:
+def hours_until_departure(dep_date: str, dep_time: str | None, origin: str | None = None) -> float | None:
     if not dep_date:
         return None
     hhmm = dep_time if (dep_time and re.match(r"^\d{2}:\d{2}$", dep_time)) else "18:00"
+    tz_name = AIRPORT_TZ.get((origin or "").upper())
+    tz = ZoneInfo(tz_name) if tz_name else timezone.utc
     try:
-        dt = datetime.fromisoformat(f"{dep_date}T{hhmm}:00+00:00")
+        dt = datetime.fromisoformat(f"{dep_date}T{hhmm}:00").replace(tzinfo=tz)
     except ValueError:
         return None
-    return (dt - datetime.now(timezone.utc)).total_seconds() / 3600.0
+    return (dt.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds() / 3600.0
 
 
 def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
