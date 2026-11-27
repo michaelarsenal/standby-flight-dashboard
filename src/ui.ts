@@ -252,11 +252,13 @@ export function renderHtml(): string {
     .sm-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 0.72rem; }
     .sm-rownum { width: 24px; text-align: right; color: var(--muted); font-family: monospace; flex-shrink: 0; margin-right: 4px; }
     .sm-seat { width: 24px; height: 24px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.68rem; border: 1px solid transparent; flex-shrink: 0; cursor: default; }
-    .sm-a { background: rgba(34,197,94,0.22); border-color: rgba(34,197,94,0.65); color: #86efac; }
-    .sm-p { background: rgba(245,158,11,0.22); border-color: rgba(245,158,11,0.7); color: #fcd34d; }
-    .sm-o { background: rgba(59,130,246,0.25); border-color: rgba(59,130,246,0.55); color: #93c5fd; }
+    .sm-a { background: #f8fafc; border-color: #cbd5e1; color: #0f172a; }
+    .sm-p { background: #fffbeb; border-color: #f59e0b; color: #92400e; }
+    .sm-o { background: #1d4ed8; border-color: #3b82f6; color: #ffffff; }
     .sm-b { background: rgba(100,116,139,0.22); border-color: rgba(100,116,139,0.5); color: #94a3b8; }
-    .sm-aisle { width: 14px; height: 24px; display: inline-block; flex-shrink: 0; }
+    .sm-group { display: inline-flex; align-items: center; gap: 4px; padding: 2px; border-radius: 7px; border: 1px solid transparent; }
+    .sm-group.free-row { border-color: rgba(255,255,255,0.88); box-shadow: 0 0 0 1px rgba(255,255,255,0.22); }
+    .sm-aisle { width: 12px; height: 24px; display: inline-block; flex-shrink: 0; }
     .sm-exit { font-size: 0.65rem; color: #f87171; font-weight: 700; padding: 0 3px; }
     .score-blue { background: rgba(56,189,248,0.16); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); }
     .score-slate { background: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.35); }
@@ -394,8 +396,9 @@ export function renderHtml(): string {
       <div class="sm-legend">
         <span><i class="sm-seat sm-a">A</i> Available</span>
         <span><i class="sm-seat sm-p">$</i> Paid / Preferred</span>
-        <span><i class="sm-seat sm-o">×</i> Occupied</span>
+        <span><i class="sm-seat sm-o"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></i> Occupied</span>
         <span><i class="sm-seat sm-b">X</i> Blocked</span>
+        <span><span class="sm-group free-row" style="padding:2px 6px;font-size:0.72rem;color:#f8fafc;">Empty Row</span></span>
       </div>
       <div id="seatmapBody"></div>
     </div>
@@ -895,20 +898,36 @@ export function renderHtml(): string {
       const mySeat = watchMatch && watchMatch.assigned_seat ? watchMatch.assigned_seat.toUpperCase() : '';
       document.getElementById("seatmapTitle").textContent = flightNum + (data.aircraft ? " (" + data.aircraft + ")" : "") + (mySeat ? " · My Seat " + mySeat : "") + " — Captured " + (data.captured_at || "") + " UTC";
       const cabinNames = { first: "First (F)", business: "Business / Club (J)", prem_econ: "Premium Economy (W)", economy: "Economy (Y)" };
+      const personSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
       document.getElementById("seatmapBody").innerHTML = data.seatmap.sections.map(function(sec) {
         const rowsHtml = (sec.rows || []).map(function(row) {
-          const cells = (row.seats || []).map(function(cell) {
-            if (cell.t !== "s") {
-              return '<span class="sm-aisle"></span>';
+          const parts = [];
+          let curGroup = [];
+          const flushGroup = function() {
+            if (curGroup.length === 0) return;
+            const isFreeRow = curGroup.every(function(c) { return c.s === "a" || c.s === "b"; });
+            const groupHtml = curGroup.map(function(cell) {
+              const seatLabel = String(row.n) + String(cell.l || "").toUpperCase();
+              const isMine = mySeat && seatLabel === mySeat;
+              const statusName = cell.s === "a" ? (cell.p ? "Available (Paid/Pref)" : "Available") : (cell.s === "o" ? "Occupied" : "Blocked");
+              const cls = cell.s === "a" ? (cell.p ? "sm-seat sm-p" : "sm-seat sm-a") : (cell.s === "o" ? "sm-seat sm-o" : "sm-seat sm-b");
+              const txt = cell.s === "o" ? personSvg : (cell.s === "b" ? "X" : (cell.l || ""));
+              const mineStyle = isMine ? ' style="box-shadow:0 0 0 2px #facc15;border-color:#facc15;"' : '';
+              return '<span class="' + cls + '"' + mineStyle + ' title="Seat ' + seatLabel + (isMine ? ' (YOUR SEAT)' : '') + ' — ' + statusName + '">' + txt + '</span>';
+            }).join("");
+            parts.push('<span class="sm-group' + (isFreeRow ? ' free-row' : '') + '">' + groupHtml + '</span>');
+            curGroup = [];
+          };
+          (row.seats || []).forEach(function(cell) {
+            if (cell.t === "s") {
+              curGroup.push(cell);
+            } else {
+              flushGroup();
+              parts.push('<span class="sm-aisle"></span>');
             }
-            const seatLabel = String(row.n) + String(cell.l || "").toUpperCase();
-            const isMine = mySeat && seatLabel === mySeat;
-            const statusName = cell.s === "a" ? (cell.p ? "Available (Paid/Pref)" : "Available") : (cell.s === "o" ? "Occupied" : "Blocked");
-            const cls = cell.s === "a" ? (cell.p ? "sm-seat sm-p" : "sm-seat sm-a") : (cell.s === "o" ? "sm-seat sm-o" : "sm-seat sm-b");
-            const txt = cell.s === "o" ? "×" : (cell.s === "b" ? "X" : (cell.l || ""));
-            const mineStyle = isMine ? ' style="box-shadow:0 0 0 2px #facc15;border-color:#facc15;"' : '';
-            return '<span class="' + cls + '"' + mineStyle + ' title="Seat ' + seatLabel + (isMine ? ' (YOUR SEAT)' : '') + ' — ' + statusName + '">' + txt + '</span>';
-          }).join("");
+          });
+          flushGroup();
+          const cells = parts.join("");
           const exL = row.el ? '<span class="sm-exit">EXIT</span>' : '';
           const exR = row.er ? '<span class="sm-exit">EXIT</span>' : '';
           const wingTag = row.w ? '<span style="font-size:0.65rem;color:#38bdf8;margin-left:4px;">W</span>' : '';
