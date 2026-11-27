@@ -464,6 +464,19 @@ export function renderHtml(): string {
       }
 
       list.innerHTML = latestCandidates.map((c, idx) => {
+        const fb = c.fareBuckets;
+        const bucketMap = {
+          first: fb && fb.firstMax !== null && fb.firstMax !== undefined ? 'F' + fb.firstMax : '',
+          business: fb && fb.businessMax !== null && fb.businessMax !== undefined ? 'J' + fb.businessMax : '',
+          prem_econ: fb && fb.premEconMax !== null && fb.premEconMax !== undefined ? 'W' + fb.premEconMax : '',
+          economy: fb && fb.economyMax !== null && fb.economyMax !== undefined ? 'Y' + fb.economyMax : ''
+        };
+
+        let totCap = 0;
+        let totOcc = 0;
+        let totBlk = 0;
+        let totAvail = 0;
+
         const cabins = [
           ["first", "First"],
           ["business", "Business / Club"],
@@ -474,14 +487,34 @@ export function renderHtml(): string {
           if (!s || s.total === 0) {
             return '<div class="cabin-box"><div class="cabin-name"><span>' + label + '</span><span>—</span></div><div class="cabin-nums">Not fitted</div></div>';
           }
-          const openLabel = (s.available === 0 && s.blocked > 0)
-            ? s.available + ' open (' + s.blocked + ' blk)'
-            : s.available + ' open';
+          totCap += s.total;
+          totOcc += s.occupied;
+          totBlk += s.blocked;
+          totAvail += s.available;
+          const openTotal = s.available + s.blocked;
+          const occPct = s.total > 0 ? Math.round((s.occupied / s.total) * 100) : 0;
+          const bTag = bucketMap[key] ? ' <span class="pill" style="padding:1px 6px;font-size:10px">' + bucketMap[key] + '</span>' : '';
           return '<div class="cabin-box ' + (key === targetCabin ? 'target' : '') + '">' +
-            '<div class="cabin-name"><span>' + label + '</span><strong>' + openLabel + '</strong></div>' +
-            '<div class="cabin-nums">' + s.occupied + ' occupied · ' + s.blocked + ' blocked (X)</div>' +
+            '<div class="cabin-name"><span>' + label + bTag + '</span><span style="font-size:11px;color:#94a3b8">Cap ' + s.total + '</span></div>' +
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;margin:4px 0 3px;">' +
+              '<span style="font-size:13px;font-weight:700;color:#e2e8f0">' + s.occupied + ' occ</span>' +
+              '<span style="font-size:13px;font-weight:700;color:' + (openTotal >= 15 ? '#4ade80' : openTotal >= 5 ? '#fbbf24' : '#f87171') + '">' + openTotal + ' open <span style="font-weight:500;font-size:11px;color:#94a3b8">(' + s.available + ' avail)</span></span>' +
+            '</div>' +
+            '<div style="height:4px;background:rgba(148,163,184,0.18);border-radius:999px;overflow:hidden;margin-bottom:5px;">' +
+              '<div style="height:100%;width:' + occPct + '%;background:' + (occPct >= 88 ? '#ef4444' : occPct >= 70 ? '#f59e0b' : '#22c55e') + '"></div>' +
+            '</div>' +
+            '<div class="cabin-nums" style="font-size:11px">Occ ' + s.occupied + ' · Blk ' + s.blocked + ' · Avail ' + s.available + '</div>' +
           '</div>';
         }).join("");
+
+        const totOpen = totBlk + totAvail;
+        const totPct = totCap > 0 ? Math.round((totOcc / totCap) * 100) : 0;
+        const flightTotalsBar = totCap > 0
+          ? '<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;margin:8px 0 10px;border-radius:8px;background:rgba(15,23,42,0.55);border:1px solid var(--border);font-size:12px;">' +
+              '<div><strong>Flight Total:</strong> ' + totOcc + ' / ' + totCap + ' occupied (' + totPct + '% full)</div>' +
+              '<div><strong style="color:' + (totOpen >= 35 ? '#4ade80' : totOpen >= 15 ? '#fbbf24' : '#f87171') + '">' + totOpen + ' open</strong> <span style="color:#94a3b8">(' + totAvail + ' avail · ' + totBlk + ' blk)</span></div>' +
+            '</div>'
+          : '';
 
         const efTag = c.fareBuckets ? '<span class="pill">EF: ' + c.fareBuckets.raw.slice(0, 32) + (c.fareBuckets.raw.length > 32 ? '…' : '') + '</span>' : '';
         const dr = c.disruptionRisk;
@@ -501,29 +534,14 @@ export function renderHtml(): string {
             '<div><span class="score-badge ' + badgeClass(c.readiness) + '">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>' +
           '</div>' +
           '<div class="cabins-grid">' + cabins + '</div>' +
+          flightTotalsBar +
           riskNotes +
-          '<ul class="reasons">' + c.reasons.map(r => '<li>' + r + '</li>').join("") + '</ul>' +
           '<div class="actions-row">' +
-            '<input class="ef-input" id="ef-' + idx + '" placeholder="Paste ExpertFlyer / myIDTravel buckets (e.g. F5 J9 W8 Y9 B9...)" value="' + (c.fareBuckets ? c.fareBuckets.raw : '') + '" />' +
-            '<button class="btn-ghost" onclick="recalcWithEf(' + idx + ')">Apply EF Buckets</button>' +
             '<button class="btn-ghost" onclick="openSeatmap(\\'' + c.flightKey + '\\', \\'' + c.flightNumber + '\\')">Seat Map</button>' +
             '<button class="btn-ghost btn-watch ' + (c.watched ? 'active' : '') + '" onclick="toggleWatch(' + idx + ')">' + (c.watched ? 'Watching ✓' : '+ Watch Flight') + '</button>' +
           '</div>' +
         '</div>';
       }).join("");
-    }
-
-    async function recalcWithEf(idx) {
-      const c = latestCandidates[idx];
-      const rawEf = document.getElementById("ef-" + idx).value;
-      const targetCabin = document.getElementById("targetCabin").value;
-      const res = await fetch("/api/score", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate: c, targetCabin, efBuckets: rawEf })
-      });
-      latestCandidates[idx] = await res.json();
-      renderCandidates(targetCabin);
     }
 
     async function toggleWatch(idx) {

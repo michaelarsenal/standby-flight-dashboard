@@ -96,28 +96,37 @@ export function computeStandbyScore(params: {
 
   const reasons: string[] = [];
   const cabin = cabins[targetCabin];
+  const cabinUnassigned = cabin.available + cabin.blocked;
   const totalOpenAll =
-    cabins.first.available +
-    cabins.business.available +
-    cabins.prem_econ.available +
-    cabins.economy.available;
+    cabins.first.available + cabins.first.blocked +
+    cabins.business.available + cabins.business.blocked +
+    cabins.prem_econ.available + cabins.prem_econ.blocked +
+    cabins.economy.available + cabins.economy.blocked;
 
-  // 1. Base score from seat map open seats in target cabin + spillover across cabins
+  // 1. Base score from unassigned seats (available + blocked) in target cabin
   let score = 50;
-  const openRatio = cabin.total > 0 ? cabin.available / cabin.total : 0;
+  const openRatio = cabin.total > 0 ? cabinUnassigned / cabin.total : 0;
+  const freeRatio = cabinUnassigned > 0 ? cabin.available / cabinUnassigned : 0;
 
-  if (cabin.available >= 25 || openRatio >= 0.28) {
+  if (cabinUnassigned >= 25 || openRatio >= 0.28) {
     score += 22;
-    reasons.push(`${cabin.available} open seats in ${labelCabin(targetCabin)} (${Math.round(openRatio * 100)}%)`);
-  } else if (cabin.available >= 10 || openRatio >= 0.14) {
+    reasons.push(`${cabinUnassigned} open seats (${cabin.available} avail, ${cabin.blocked} blk) in ${labelCabin(targetCabin)} (${Math.round(openRatio * 100)}%)`);
+  } else if (cabinUnassigned >= 10 || openRatio >= 0.14) {
     score += 8;
-    reasons.push(`${cabin.available} open seats in ${labelCabin(targetCabin)}`);
-  } else if (cabin.available <= 3) {
+    reasons.push(`${cabinUnassigned} open seats (${cabin.available} avail, ${cabin.blocked} blk) in ${labelCabin(targetCabin)}`);
+  } else if (cabinUnassigned <= 3) {
     score -= 24;
-    reasons.push(`Only ${cabin.available} open seat(s) in ${labelCabin(targetCabin)}`);
+    reasons.push(`Only ${cabinUnassigned} open seat(s) in ${labelCabin(targetCabin)}`);
   } else {
     score -= 8;
-    reasons.push(`Tight seat map: ${cabin.available} open in ${labelCabin(targetCabin)}`);
+    reasons.push(`Tight seat map: ${cabinUnassigned} open (${cabin.available} avail) in ${labelCabin(targetCabin)}`);
+  }
+
+  if (cabin.available >= 15 || (cabinUnassigned >= 8 && freeRatio >= 0.5)) {
+    score += 5;
+  } else if (cabin.available === 0 && cabin.blocked > 0) {
+    score -= 8;
+    reasons.push(`All ${cabin.blocked} open seats in ${labelCabin(targetCabin)} are blocked`);
   }
 
   if (totalOpenAll >= 45) {
@@ -139,7 +148,7 @@ export function computeStandbyScore(params: {
     reasons.push(`Rapid check-in fill rate (-${velocityDropPerHour.toFixed(1)} seats/hr)`);
   }
 
-  // 3. Fare bucket depth (if ExpertFlyer / myIDTravel buckets were provided)
+  // 3. Fare bucket depth + seat-map cross-check
   if (fareBuckets) {
     const bucketVal =
       targetCabin === "first"
@@ -153,13 +162,19 @@ export function computeStandbyScore(params: {
     if (bucketVal !== null) {
       if (bucketVal >= 9) {
         score += 18;
+        if (cabin.available >= 20) score += 6;
         reasons.push(`GDS ${labelCabin(targetCabin)} max bucket at 9 (healthy inventory)`);
       } else if (bucketVal >= 5) {
         score += 8;
         reasons.push(`GDS ${labelCabin(targetCabin)} max bucket at ${bucketVal}`);
       } else if (bucketVal <= 2) {
         score -= 22;
-        reasons.push(`GDS ${labelCabin(targetCabin)} max bucket critically low (${bucketVal})`);
+        if (cabinUnassigned >= 20) {
+          score -= 14;
+          reasons.push(`Low fare bucket (${bucketVal}) despite ${cabinUnassigned} unassigned seats — likely unseated bookings`);
+        } else {
+          reasons.push(`GDS ${labelCabin(targetCabin)} max bucket critically low (${bucketVal})`);
+        }
       } else {
         score -= 8;
         reasons.push(`GDS ${labelCabin(targetCabin)} max bucket tightening (${bucketVal})`);
