@@ -727,40 +727,24 @@ export default {
       };
       const preservedCabins: string[] = [];
       if (prevSnap) {
-        if (mergedCabins.first.total === 0 && prevSnap.first_total > 0) {
-          mergedCabins.first = {
-            available: prevSnap.first_available,
-            occupied: prevSnap.first_occupied,
-            blocked: prevSnap.first_blocked,
-            total: prevSnap.first_total,
-          };
+        const prevFirst = cabinFromSnapshot(prevSnap.first_open, prevSnap.first_occupied, prevSnap.first_blocked, 0);
+        if (mergedCabins.first.total === 0 && prevFirst.total > 0) {
+          mergedCabins.first = prevFirst;
           preservedCabins.push("F");
         }
-        if (mergedCabins.business.total === 0 && prevSnap.business_total > 0) {
-          mergedCabins.business = {
-            available: prevSnap.business_available,
-            occupied: prevSnap.business_occupied,
-            blocked: prevSnap.business_blocked,
-            total: prevSnap.business_total,
-          };
+        const prevBiz = cabinFromSnapshot(prevSnap.business_open, prevSnap.business_occupied, prevSnap.business_blocked, 0);
+        if (mergedCabins.business.total === 0 && prevBiz.total > 0) {
+          mergedCabins.business = prevBiz;
           preservedCabins.push("J");
         }
-        if (mergedCabins.prem_econ.total === 0 && prevSnap.prem_econ_total > 0) {
-          mergedCabins.prem_econ = {
-            available: prevSnap.prem_econ_available,
-            occupied: prevSnap.prem_econ_occupied,
-            blocked: prevSnap.prem_econ_blocked,
-            total: prevSnap.prem_econ_total,
-          };
+        const prevPe = cabinFromSnapshot(prevSnap.prem_econ_open, prevSnap.prem_econ_occupied, prevSnap.prem_econ_blocked, 0);
+        if (mergedCabins.prem_econ.total === 0 && prevPe.total > 0) {
+          mergedCabins.prem_econ = prevPe;
           preservedCabins.push("W");
         }
-        if (mergedCabins.economy.total === 0 && prevSnap.economy_total > 0) {
-          mergedCabins.economy = {
-            available: prevSnap.economy_available,
-            occupied: prevSnap.economy_occupied,
-            blocked: prevSnap.economy_blocked,
-            total: prevSnap.economy_total,
-          };
+        const prevEcon = cabinFromSnapshot(prevSnap.economy_open, prevSnap.economy_occupied, prevSnap.economy_blocked, 0);
+        if (mergedCabins.economy.total === 0 && prevEcon.total > 0) {
+          mergedCabins.economy = prevEcon;
           preservedCabins.push("Y");
         }
       }
