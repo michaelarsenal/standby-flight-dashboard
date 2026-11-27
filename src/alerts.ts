@@ -1,4 +1,83 @@
-import type { Env, FlightCandidate, ReadinessLevel } from "./types.ts";
+import type { Env, FlightCandidate, InboundFlightInfo, ReadinessLevel, WatchedFlight } from "./types.ts";
+
+export async function sendNtfyPush(
+  topic: string,
+  title: string,
+  message: string,
+  opts?: { priority?: string; tags?: string; clickUrl?: string }
+): Promise<boolean> {
+  const clean = topic.trim();
+  if (!clean) return false;
+  const headers: Record<string, string> = {
+    Title: title,
+    Priority: opts?.priority || "default",
+  };
+  if (opts?.tags) headers.Tags = opts.tags;
+  if (opts?.clickUrl) headers.Click = opts.clickUrl;
+
+  const res = await fetch(`https://ntfy.sh/${encodeURIComponent(clean)}`, {
+    method: "POST",
+    headers,
+    body: message,
+  });
+  return res.ok;
+}
+
+export async function sendStagePushAlert(
+  env: Env,
+  ntfyTopic: string | null,
+  watch: WatchedFlight,
+  inbound: InboundFlightInfo,
+  stageLabel: string
+): Promise<boolean> {
+  const title = `${watch.flight_number} Inbound ${inbound.inboundFlight}: ${stageLabel}`;
+  const body = [
+    `${inbound.inboundFlight} (${inbound.origin} → ${inbound.destination}${inbound.registration ? `, ${inbound.registration}` : ""})`,
+    inbound.impactSummary,
+    inbound.estimatedArrival ? `ETA: ${inbound.estimatedArrival}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const topic = ntfyTopic || env.NTFY_TOPIC || "";
+  let sent = false;
+  if (topic) {
+    const isUrgent = inbound.stage === "cancelled" || inbound.outboundImpact === "high";
+    const tags =
+      inbound.stage === "cancelled"
+        ? "rotating_light,airplane"
+        : inbound.stage === "landed"
+          ? "airplane_arriving,white_check_mark"
+          : inbound.stage === "enroute"
+            ? "airplane_departure"
+            : "clock1";
+    sent = await sendNtfyPush(topic, title, body, {
+      priority: isUrgent ? "high" : "default",
+      tags,
+      clickUrl: inbound.flightRadarUrl,
+    });
+  }
+
+  if (env.RESEND_API_KEY && env.ALERT_EMAIL_TO) {
+    const from = env.ALERT_EMAIL_FROM || "Standby Monitor <onboarding@resend.dev>";
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: env.ALERT_EMAIL_TO.split(",").map((s) => s.trim()),
+        subject: `[Inbound ${stageLabel}] ${watch.flight_number} (${inbound.inboundFlight})`,
+        html: `<p><strong>${title}</strong></p><p>${body.replace(/\n/g, "<br/>")}</p><p><a href="${inbound.flightRadarUrl}">Track on FlightRadar24</a></p>`,
+      }),
+    });
+    if (res.ok) sent = true;
+  }
+
+  return sent;
+}
 
 export async function sendStandbyAlert(
   env: Env,

@@ -65,6 +65,15 @@ export interface SearchQuery {
   targetCabin: CabinKey;
 }
 
+export type InboundStage = "scheduled" | "enroute" | "landed" | "cancelled";
+
+export interface AlertStages {
+  etd: boolean;
+  enroute: boolean;
+  landed: boolean;
+  disruption: boolean;
+}
+
 export interface InboundFlightInfo {
   inboundFlight: string;
   inboundIdent: string;
@@ -72,6 +81,8 @@ export interface InboundFlightInfo {
   destination: string;
   registration: string;
   status: string;
+  stage: InboundStage;
+  departInMins: number | null;
   scheduledDeparture?: string;
   estimatedDeparture?: string;
   hasDeparted?: boolean;
@@ -99,9 +110,12 @@ export interface WatchedFlight {
   ef_buckets: string | null;
   last_status: ReadinessLevel | null;
   last_score: number | null;
+  alert_stages?: string | null;
+  last_inbound_stage?: string | null;
   created_at: string;
   updated_at: string;
   inbound?: InboundFlightInfo | null;
+  alertStages?: AlertStages;
 }
 
 export interface SeatSnapshot {
@@ -134,4 +148,5 @@ export interface Env {
   RESEND_API_KEY?: string;
   ALERT_EMAIL_TO?: string;
   ALERT_EMAIL_FROM?: string;
+  NTFY_TOPIC?: string;
 }

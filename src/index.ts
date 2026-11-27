@@ -1,13 +1,18 @@
 import { expandAirportInput } from "./airports.ts";
-import { sendStandbyAlert } from "./alerts.ts";
+import { sendNtfyPush, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
 import {
   deleteWatch,
   getEfSeatmap,
   getLatestExpertFlyerSnapshots,
+  getSetting,
   getSnapshots,
   listEfFlights,
   listWatches,
+  parseAlertStages,
   recordSnapshot,
+  setSetting,
+  updateWatchAlerts,
+  updateWatchInboundStage,
   updateWatchStatus,
   upsertEfFlights,
   upsertEfSeatmap,
@@ -28,7 +33,7 @@ import {
   computeStandbyScore,
   parseFareBuckets,
 } from "./scoring.ts";
-import type { CabinKey, CabinSeatSummary, Env, FlightCandidate, RouteDisruption, SeatSnapshot } from "./types.ts";
+import type { AlertStages, CabinKey, CabinSeatSummary, Env, FlightCandidate, RouteDisruption, SeatSnapshot } from "./types.ts";
 import { MANIFEST_JSON, renderHtml } from "./ui.ts";
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -403,9 +408,53 @@ export default {
       });
     }
 
-    if (path === "/api/watches" && request.method === "GET") {
-      if (!env.DB) return jsonResponse({ watches: [] });
+    if (path === "/api/settings/push" && request.method === "GET") {
+      const topic = env.DB ? await getSetting(env.DB, "ntfy_topic") : null;
+      return jsonResponse({ ntfyTopic: topic || env.NTFY_TOPIC || "" });
+    }
+
+    if (path === "/api/settings/push" && request.method === "POST") {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const body = (await request.json()) as { ntfyTopic?: string; test?: boolean };
+      const topic = String(body.ntfyTopic || "").trim();
+      await setSetting(env.DB, "ntfy_topic", topic);
+      let testSent = false;
+      if (body.test && topic) {
+        testSent = await sendNtfyPush(
+          topic,
+          "Standby Flight Dashboard — Push Alerts Active",
+          "You will now receive stage alerts (ETD, Enroute, Landed, Delay/Cancel) for your watched flights.",
+          { tags: "airplane,white_check_mark" }
+        );
+      }
+      return jsonResponse({ ok: true, ntfyTopic: topic, testSent });
+    }
+
+    if (path.startsWith("/api/watches/") && path.endsWith("/alerts") && (request.method === "PATCH" || request.method === "POST")) {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const flightKey = decodeURIComponent(path.slice("/api/watches/".length, -"/alerts".length));
+      const body = (await request.json()) as Partial<AlertStages>;
       const watches = await listWatches(env.DB);
+      const existing = watches.find((w) => w.flight_key === flightKey);
+      if (!existing) return jsonResponse({ error: "Watch not found" }, 404);
+      const current = parseAlertStages(existing.alert_stages);
+      const updated: AlertStages = {
+        etd: body.etd !== undefined ? Boolean(body.etd) : current.etd,
+        enroute: body.enroute !== undefined ? Boolean(body.enroute) : current.enroute,
+        landed: body.landed !== undefined ? Boolean(body.landed) : current.landed,
+        disruption: body.disruption !== undefined ? Boolean(body.disruption) : current.disruption,
+      };
+      await updateWatchAlerts(env.DB, flightKey, updated);
+      return jsonResponse({ ok: true, alertStages: updated });
+    }
+
+    if (path === "/api/watches" && request.method === "GET") {
+      if (!env.DB) return jsonResponse({ watches: [], ntfyTopic: env.NTFY_TOPIC || "" });
+      const [watches, savedTopic] = await Promise.all([
+        listWatches(env.DB),
+        getSetting(env.DB, "ntfy_topic"),
+      ]);
+      const ntfyTopic = savedTopic || env.NTFY_TOPIC || "";
       if (env.FLIGHTAWARE_API_KEY && watches.length > 0) {
         const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
         const enriched = await Promise.all(
@@ -424,9 +473,9 @@ export default {
             }
           }),
         );
-        return jsonResponse({ watches: enriched });
+        return jsonResponse({ watches: enriched, ntfyTopic });
       }
-      return jsonResponse({ watches });
+      return jsonResponse({ watches, ntfyTopic });
     }
 
     if (path === "/api/watches" && request.method === "POST") {
@@ -633,10 +682,63 @@ export default {
     if (!env.DB) return;
     const watches = await listWatches(env.DB);
     const today = new Date().toISOString().slice(0, 10);
+    const ntfyTopic = await getSetting(env.DB, "ntfy_topic");
 
     const efMap = await getLatestExpertFlyerSnapshots(env.DB);
     for (const w of watches) {
       if (w.departure_date < today) continue;
+
+      if (env.FLIGHTAWARE_API_KEY) {
+        try {
+          const inbound = await fetchInboundDetails(
+            env.FLIGHTAWARE_API_KEY,
+            w.flight_number,
+            w.departure_date,
+            w.departure_time
+          );
+          if (inbound) {
+            const isDelayed = inbound.delayMins >= 15;
+            const stageKey =
+              inbound.stage === "cancelled"
+                ? "cancelled"
+                : inbound.stage === "landed"
+                  ? "landed"
+                  : inbound.stage === "enroute"
+                    ? (isDelayed ? "enroute_delayed" : "enroute")
+                    : (isDelayed ? "etd_delayed" : "etd");
+
+            if (w.last_inbound_stage !== stageKey) {
+              const alerts = parseAlertStages(w.alert_stages);
+              const shouldAlert =
+                (stageKey === "cancelled" && alerts.disruption) ||
+                (stageKey.endsWith("_delayed") && alerts.disruption) ||
+                (stageKey === "landed" && alerts.landed) ||
+                (stageKey === "enroute" && alerts.enroute) ||
+                (stageKey === "etd" && alerts.etd);
+
+              if (shouldAlert && w.last_inbound_stage) {
+                const label =
+                  stageKey === "cancelled"
+                    ? "CANCELLED"
+                    : stageKey === "landed"
+                      ? "LANDED"
+                      : stageKey === "enroute_delayed"
+                        ? `ENROUTE (+${inbound.delayMins}m DELAYED)`
+                        : stageKey === "enroute"
+                          ? "ENROUTE (ON TIME)"
+                          : stageKey === "etd_delayed"
+                            ? `ETD DELAYED (+${inbound.delayMins}m)`
+                            : "ETD SCHEDULED";
+                await sendStagePushAlert(env, ntfyTopic, w, inbound, label);
+              }
+              await updateWatchInboundStage(env.DB, w.flight_key, stageKey);
+            }
+          }
+        } catch {
+          // Ignore inbound check failure in cron
+        }
+      }
+
       if (efMap.has(w.flight_key)) continue;
 
       const result = await runFlightSearch({

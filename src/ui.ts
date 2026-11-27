@@ -258,6 +258,28 @@ export function renderHtml(): string {
     .sm-b { background: rgba(100,116,139,0.22); border-color: rgba(100,116,139,0.5); color: #94a3b8; }
     .sm-aisle { width: 14px; height: 24px; display: inline-block; flex-shrink: 0; }
     .sm-exit { font-size: 0.65rem; color: #f87171; font-weight: 700; padding: 0 3px; }
+    .score-blue { background: rgba(56,189,248,0.16); color: #38bdf8; border: 1px solid rgba(56,189,248,0.4); }
+    .score-slate { background: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.35); }
+    .stage-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid rgba(148,163,184,0.28);
+      background: rgba(15,23,42,0.55);
+      color: #64748b;
+      margin-right: 4px;
+      margin-top: 3px;
+    }
+    .stage-pill.on {
+      border-color: rgba(56,189,248,0.55);
+      background: rgba(56,189,248,0.14);
+      color: #7dd3fc;
+    }
   </style>
 </head>
 <body>
@@ -338,6 +360,14 @@ export function renderHtml(): string {
           <input id="mwDate" type="date" style="width:145px" />
         </div>
         <button class="btn-ghost" onclick="addManualWatch()" style="height:36px">+ Watch Flight #</button>
+        <div style="margin-left:auto; display:flex; gap:6px; align-items:flex-end;">
+          <div>
+            <label for="ntfyTopic">Push Alerts (ntfy.sh topic)</label>
+            <input id="ntfyTopic" type="text" placeholder="e.g. standby-ba-alerts" style="width:170px" />
+          </div>
+          <button class="btn-ghost" onclick="savePushTopic(false)" style="height:36px">Save</button>
+          <button class="btn-ghost" onclick="savePushTopic(true)" style="height:36px">Test Push</button>
+        </div>
       </div>
       <div id="watchesList" class="subtitle">Loading watched flights...</div>
     </div>
@@ -541,10 +571,51 @@ export function renderHtml(): string {
       loadWatches();
     }
 
+    async function savePushTopic(sendTest) {
+      var input = document.getElementById("ntfyTopic");
+      var topic = input ? input.value.trim() : "";
+      if (sendTest && !topic) {
+        alert("Enter a ntfy.sh topic name first (e.g. standby-ba-alerts), then subscribe to it in the ntfy app or at https://ntfy.sh/" );
+        return;
+      }
+      var res = await fetch("/api/settings/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ntfyTopic: topic, test: Boolean(sendTest) })
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to save push topic");
+        return;
+      }
+      if (sendTest) {
+        alert(data.testSent ? "Test push sent to ntfy.sh/" + topic : "Saved topic, but test push failed.");
+      } else {
+        alert(topic ? "Push topic saved: ntfy.sh/" + topic : "Push topic cleared.");
+      }
+    }
+
+    async function toggleStageAlert(flightKey, stageKey, nextVal) {
+      var payload = {};
+      payload[stageKey] = nextVal;
+      var res = await fetch("/api/watches/" + encodeURIComponent(flightKey) + "/alerts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        loadWatches();
+      }
+    }
+
     async function loadWatches() {
       const box = document.getElementById("watchesList");
       const res = await fetch("/api/watches");
       const data = await res.json();
+      const topicEl = document.getElementById("ntfyTopic");
+      if (topicEl && typeof data.ntfyTopic === "string" && document.activeElement !== topicEl) {
+        topicEl.value = data.ntfyTopic;
+      }
       const watches = data.watches || [];
       if (watches.length === 0) {
         box.innerHTML = '<span class="subtitle">No flights watched yet. Click <strong>+ Watch Flight</strong> on any search result to track T-24h seat-fill velocity and receive alerts.</span>';
@@ -555,17 +626,59 @@ export function renderHtml(): string {
         var m = String(iso).match(/T([0-9]{2}:[0-9]{2})/);
         return m ? m[1] + 'Z' : String(iso);
       }
-      function impactBadgeClass(impact) {
-        if (impact === 'high') return 'score-red';
-        if (impact === 'watch') return 'score-amber';
-        return 'score-green';
+      function fmtMinsCountdown(mins) {
+        if (mins === null || mins === undefined) return '';
+        if (mins <= 0) return 'due now';
+        if (mins < 60) return 'in ' + mins + 'm';
+        return 'in ' + Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+      }
+      function stageBadge(inb, estTxt) {
+        var st = inb.stage || 'scheduled';
+        var turnTxt = inb.turnaroundMins !== null && inb.turnaroundMins !== undefined ? inb.turnaroundMins + 'm turn' : '';
+        if (st === 'cancelled') {
+          return { cls: 'score-red', text: 'Cancelled' };
+        }
+        if (st === 'landed') {
+          return { cls: 'score-blue', text: 'Landed ' + estTxt + (turnTxt ? ' · ' + turnTxt : '') };
+        }
+        if (st === 'enroute') {
+          if (inb.delayMins >= 15) {
+            return { cls: 'score-amber', text: 'Enroute · +' + inb.delayMins + 'm delayed' + (turnTxt ? ' (' + turnTxt + ')' : '') };
+          }
+          return { cls: 'score-green', text: 'Enroute · On time' + (turnTxt ? ' (' + turnTxt + ')' : '') };
+        }
+        var etdTxt = fmtUtcTime(inb.estimatedDeparture || inb.scheduledDeparture);
+        var cd = fmtMinsCountdown(inb.departInMins);
+        var extra = [];
+        if (cd) extra.push(cd);
+        if (inb.delayMins >= 15) extra.push('+' + inb.delayMins + 'm delayed');
+        var label = 'ETD ' + etdTxt + (extra.length ? ' (' + extra.join(', ') + ')' : '');
+        return { cls: inb.delayMins >= 15 ? 'score-amber' : 'score-slate', text: label };
+      }
+      function renderAlertToggles(w) {
+        var a = w.alertStages || { etd: true, enroute: true, landed: true, disruption: true };
+        var stages = [
+          { key: 'etd', label: 'ETD' },
+          { key: 'enroute', label: 'Enroute' },
+          { key: 'landed', label: 'Landed' },
+          { key: 'disruption', label: 'Delay/Cancel' }
+        ];
+        return '<div style="margin-top:4px">' +
+          '<span style="font-size:10px;color:#64748b;margin-right:4px">Alerts:</span>' +
+          stages.map(function(s) {
+            var isOn = a[s.key] !== false;
+            return '<button type="button" class="stage-pill ' + (isOn ? 'on' : '') + '" onclick="toggleStageAlert(\\'' + w.flight_key + '\\', \\'' + s.key + '\\', ' + (!isOn) + ')">' +
+              (isOn ? '🔔 ' : '') + s.label + '</button>';
+          }).join('') +
+        '</div>';
       }
       function renderInboundCell(w) {
         var inb = w.inbound;
         var fallbackFr24 = 'https://www.flightradar24.com/' + encodeURIComponent(w.flight_number || '');
         if (!inb) {
           return '<div style="font-size:12px;color:#64748b">Not yet assigned (check inside T-24h)</div>' +
-            '<div style="margin-top:3px"><a href="' + fallbackFr24 + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FR24 ↗</a></div>';
+            '<div style="margin-top:3px"><a href="' + fallbackFr24 + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FR24 ↗</a></div>' +
+            renderAlertToggles(w);
         }
         var routeTxt = (inb.origin || '?') + ' → ' + (inb.destination || '?');
         var regTxt = inb.registration ? ' <span style="color:#94a3b8">(' + inb.registration + ')</span>' : '';
@@ -573,6 +686,10 @@ export function renderHtml(): string {
         var estTxt = fmtUtcTime(inb.estimatedArrival || inb.scheduledArrival);
         var schedTxt = fmtUtcTime(inb.scheduledArrival);
         var delayTxt = inb.delayMins > 0 ? ' <span style="color:#f87171">(+' + inb.delayMins + 'm)</span>' : '';
+        var sb = stageBadge(inb, estTxt);
+        var impactNote = (inb.outboundImpact === 'high' || inb.outboundImpact === 'watch')
+          ? '<div style="font-size:10px;color:' + (inb.outboundImpact === 'high' ? '#f87171' : '#fbbf24') + ';margin-top:2px">⚠ ' + (inb.impactSummary || '') + '</div>'
+          : '';
         var links = '';
         if (inb.flightRadarUrl) {
           links += '<a href="' + inb.flightRadarUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px">FR24 ↗</a>';
@@ -582,8 +699,10 @@ export function renderHtml(): string {
         }
         return '<div style="font-size:12px"><strong>' + inb.inboundFlight + '</strong> ' + routeTxt + regTxt + '</div>' +
           '<div style="font-size:11px;color:#cbd5e1;margin-top:2px">' + depTxt + 'ETA ' + estTxt + (estTxt !== schedTxt ? ' <span style="color:#64748b">(Sched ' + schedTxt + ')</span>' : '') + delayTxt + '</div>' +
-          '<div style="margin-top:3px"><span class="score-badge ' + impactBadgeClass(inb.outboundImpact) + '" style="font-size:10px;padding:2px 6px">' + (inb.impactSummary || 'No impact') + '</span></div>' +
-          (links ? '<div style="margin-top:3px">' + links + '</div>' : '');
+          '<div style="margin-top:3px"><span class="score-badge ' + sb.cls + '" style="font-size:10px;padding:2px 6px">' + sb.text + '</span></div>' +
+          impactNote +
+          (links ? '<div style="margin-top:3px">' + links + '</div>' : '') +
+          renderAlertToggles(w);
       }
       box.innerHTML = '<table><thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Inbound Aircraft</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
         watches.map(w => '<tr>' +

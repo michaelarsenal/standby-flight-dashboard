@@ -192,7 +192,27 @@ export async function fetchInboundDetails(
     const hasDeparted = Boolean(inbound.actual_out);
     const scheduledArrival = String(inbound.scheduled_in || "");
     const estimatedArrival = String(inbound.actual_in || inbound.estimated_in || inbound.scheduled_in || "");
-    const delayMins = typeof inbound.arrival_delay === "number" ? Math.round(inbound.arrival_delay / 60) : 0;
+    const arrDelayMins = typeof inbound.arrival_delay === "number" ? Math.round(inbound.arrival_delay / 60) : 0;
+    const depDelayMins = typeof inbound.departure_delay === "number" ? Math.round(inbound.departure_delay / 60) : 0;
+    const delayMins = hasDeparted ? arrDelayMins : Math.max(arrDelayMins, depDelayMins);
+
+    const statusLower = status.toLowerCase();
+    let stage: "scheduled" | "enroute" | "landed" | "cancelled" = "scheduled";
+    if (inbound.cancelled || statusLower.includes("cancel")) {
+      stage = "cancelled";
+    } else if (inbound.actual_in || statusLower.includes("arrived") || statusLower.includes("landed")) {
+      stage = "landed";
+    } else if (inbound.actual_out || statusLower.includes("en route")) {
+      stage = "enroute";
+    }
+
+    let departInMins: number | null = null;
+    if (stage === "scheduled" && estimatedDeparture) {
+      const depMs = new Date(estimatedDeparture).getTime();
+      if (!Number.isNaN(depMs)) {
+        departInMins = Math.round((depMs - Date.now()) / 60000);
+      }
+    }
 
     const outIso = upcoming.scheduled_out || (departureDate ? `${departureDate}T${departureTime || "18:00"}:00Z` : "");
     let turnaroundMins: number | null = null;
@@ -206,7 +226,7 @@ export async function fetchInboundDetails(
 
     let outboundImpact: "none" | "watch" | "high" = "none";
     let impactSummary = "";
-    if (inbound.cancelled) {
+    if (stage === "cancelled") {
       outboundImpact = "high";
       impactSummary = "Inbound cancelled — likely outbound delay or aircraft swap";
     } else if (turnaroundMins !== null && turnaroundMins < 55) {
@@ -215,9 +235,9 @@ export async function fetchInboundDetails(
     } else if (delayMins >= 45) {
       outboundImpact = "high";
       impactSummary = `Running ${delayMins}m late — likely to affect outbound`;
-    } else if ((turnaroundMins !== null && turnaroundMins < 85) || delayMins >= 20) {
+    } else if ((turnaroundMins !== null && turnaroundMins < 85) || delayMins >= 15) {
       outboundImpact = "watch";
-      impactSummary = delayMins >= 20
+      impactSummary = delayMins >= 15
         ? `Running ${delayMins}m late${turnaroundMins !== null ? ` (${turnaroundMins}m turn)` : ""}`
         : `Moderate ${turnaroundMins}m turnaround`;
     } else {
@@ -234,6 +254,8 @@ export async function fetchInboundDetails(
       destination,
       registration,
       status,
+      stage,
+      departInMins,
       scheduledDeparture,
       estimatedDeparture,
       hasDeparted,

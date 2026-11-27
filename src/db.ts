@@ -1,4 +1,4 @@
-import type { FlightCandidate, ReadinessLevel, SeatSnapshot, WatchedFlight } from "./types.ts";
+import type { AlertStages, FlightCandidate, ReadinessLevel, SeatSnapshot, WatchedFlight } from "./types.ts";
 
 export async function ensureSchema(db: D1Database): Promise<void> {
   await db.batch([
@@ -60,7 +60,43 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       seatmap_json TEXT NOT NULL,
       captured_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`),
   ]);
+  for (const col of [
+    "ALTER TABLE watches ADD COLUMN alert_stages TEXT",
+    "ALTER TABLE watches ADD COLUMN last_inbound_stage TEXT",
+  ]) {
+    try {
+      await db.prepare(col).run();
+    } catch {
+      // Column already exists
+    }
+  }
+}
+
+export const DEFAULT_ALERT_STAGES: AlertStages = {
+  etd: true,
+  enroute: true,
+  landed: true,
+  disruption: true,
+};
+
+export function parseAlertStages(raw?: string | null): AlertStages {
+  if (!raw) return { ...DEFAULT_ALERT_STAGES };
+  try {
+    const parsed = JSON.parse(raw) as Partial<AlertStages>;
+    return {
+      etd: parsed.etd !== false,
+      enroute: parsed.enroute !== false,
+      landed: parsed.landed !== false,
+      disruption: parsed.disruption !== false,
+    };
+  } catch {
+    return { ...DEFAULT_ALERT_STAGES };
+  }
 }
 
 export async function listWatches(db: D1Database): Promise<WatchedFlight[]> {
@@ -68,7 +104,10 @@ export async function listWatches(db: D1Database): Promise<WatchedFlight[]> {
   const res = await db
     .prepare("SELECT * FROM watches ORDER BY departure_date ASC, departure_time ASC")
     .all<WatchedFlight>();
-  return res.results ?? [];
+  return (res.results ?? []).map((w) => ({
+    ...w,
+    alertStages: parseAlertStages(w.alert_stages),
+  }));
 }
 
 export async function upsertWatch(
@@ -122,6 +161,51 @@ export async function updateWatchStatus(
   await db
     .prepare("UPDATE watches SET last_status = ?, last_score = ?, updated_at = datetime('now') WHERE flight_key = ?")
     .bind(status, score, flightKey)
+    .run();
+}
+
+export async function updateWatchAlerts(
+  db: D1Database,
+  flightKey: string,
+  alertStages: AlertStages
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET alert_stages = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(JSON.stringify(alertStages), flightKey)
+    .run();
+}
+
+export async function updateWatchInboundStage(
+  db: D1Database,
+  flightKey: string,
+  stageKey: string
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET last_inbound_stage = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(stageKey, flightKey)
+    .run();
+}
+
+export async function getSetting(db: D1Database, key: string): Promise<string | null> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT value FROM settings WHERE key = ?")
+    .bind(key)
+    .first<{ value: string }>();
+  return row?.value ?? null;
+}
+
+export async function setSetting(db: D1Database, key: string, value: string): Promise<void> {
+  await ensureSchema(db);
+  if (!value.trim()) {
+    await db.prepare("DELETE FROM settings WHERE key = ?").bind(key).run();
+    return;
+  }
+  await db
+    .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .bind(key, value.trim())
     .run();
 }
 
