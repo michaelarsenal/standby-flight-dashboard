@@ -413,8 +413,7 @@ export function renderHtml(): string {
     }
 
     function badgeText(level, score) {
-      const label = level === "green" ? "LOOKING GOOD" : level === "red" ? "TIGHT" : "CAUTION";
-      return label + " · " + score + "/100";
+      return level === "green" ? "LOOKING GOOD" : level === "red" ? "TIGHT" : "CAUTION";
     }
 
     async function runSearch(e) {
@@ -509,23 +508,31 @@ export function renderHtml(): string {
 
         const totOpen = totBlk + totAvail;
         const totPct = totCap > 0 ? Math.round((totOcc / totCap) * 100) : 0;
-        const flightTotalsBar = totCap > 0
-          ? '<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;margin:8px 0 10px;border-radius:8px;background:rgba(15,23,42,0.55);border:1px solid var(--border);font-size:12px;">' +
-              '<div><strong>Flight Total:</strong> ' + totOcc + ' / ' + totCap + ' occupied (' + totPct + '% full)</div>' +
-              '<div><strong style="color:' + (totOpen >= 35 ? '#4ade80' : totOpen >= 15 ? '#fbbf24' : '#f87171') + '">' + totOpen + ' open</strong> <span style="color:#94a3b8">(' + totAvail + ' avail · ' + totBlk + ' blk)</span></div>' +
+        const flightTotalsPill = totCap > 0
+          ? '<div style="display:flex;align-items:center;gap:10px;padding:4px 10px;border-radius:8px;background:rgba(15,23,42,0.65);border:1px solid var(--border);font-size:12px;">' +
+              '<span><strong>' + totOcc + ' / ' + totCap + '</strong> occ (' + totPct + '%)</span>' +
+              '<span style="color:' + (totOpen >= 35 ? '#4ade80' : totOpen >= 15 ? '#fbbf24' : '#f87171') + ';font-weight:700">' + totOpen + ' open <span style="color:#94a3b8;font-weight:400">(' + totAvail + ' avail · ' + totBlk + ' blk)</span></span>' +
             '</div>'
           : '';
 
         const ec = c.economyComfort;
         const economyComfortBar = ec
-          ? '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:6px 10px;margin:0 0 10px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.22);font-size:11.5px;color:#cbd5e1;">' +
+          ? '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:6px 10px;margin:8px 0 10px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.22);font-size:11.5px;color:#cbd5e1;">' +
               '<span><strong style="color:#7dd3fc">Economy Comfort:</strong> Empty Rows <strong>L ' + ec.emptyLeft + ' · M ' + ec.emptyMiddle + ' · R ' + ec.emptyRight + '</strong> <span style="color:#94a3b8">(' + ec.emptyRowsTotal + ' total)</span></span>' +
               '<span>Adjacent Spare: <strong>' + ec.adjacentSpareSeats + '</strong> seats</span>' +
               '<span>Window: <strong>' + ec.windowAvailable + '</strong> · Aisle: <strong>' + ec.aisleAvailable + '</strong></span>' +
             '</div>'
           : '';
 
-        const efTag = c.fareBuckets ? '<span class="pill">EF: ' + c.fareBuckets.raw.slice(0, 32) + (c.fareBuckets.raw.length > 32 ? '…' : '') + '</span>' : '';
+        const efHtml = c.fareBuckets
+          ? c.fareBuckets.raw.trim().split(/ +/).map(function(tok) {
+              if (/^[JWY][0-9]+$/i.test(tok)) {
+                return '<strong style="color:#38bdf8;background:rgba(56,189,248,0.18);padding:0 4px;border-radius:4px;">' + tok + '</strong>';
+              }
+              return '<span style="color:#94a3b8">' + tok + '</span>';
+            }).join(' ')
+          : '';
+        const efTag = efHtml ? '<span class="pill" style="flex-wrap:wrap;gap:3px;">EF: ' + efHtml + '</span>' : '';
         const dr = c.disruptionRisk;
         const riskClass = dr && dr.level === "high" ? "score-red" : dr && dr.level === "moderate" ? "score-amber" : "score-green";
         const riskPill = dr ? '<span class="score-badge ' + riskClass + '" style="margin-left:6px;">RISK: ' + dr.level.toUpperCase() + '</span>' : '';
@@ -540,10 +547,10 @@ export function renderHtml(): string {
               '<span class="route-meta">' + c.origin + ' → ' + c.destination + ' · ' + c.departureTime + '–' + c.arrivalTime + ' (' + c.duration + ') · ' + c.aircraft + '</span>' +
               efTag +
             '</div>' +
-            '<div><span class="score-badge ' + badgeClass(c.readiness) + '">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>' +
+            flightTotalsPill +
+            '<div style="display:flex;align-items:center;"><span class="score-badge ' + badgeClass(c.readiness) + '" title="Standby Score: ' + c.standbyScore + '/100">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>' +
           '</div>' +
           '<div class="cabins-grid">' + cabins + '</div>' +
-          flightTotalsBar +
           economyComfortBar +
           riskNotes +
           '<div class="actions-row">' +
