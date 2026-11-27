@@ -768,9 +768,11 @@ export default {
             if (w.last_seat_state) {
               try { prev = JSON.parse(w.last_seat_state); } catch {}
             }
+            let becameUnseated = false;
             if (prev) {
               const alertsToSend: Array<{ title: string; msg: string }> = [];
               if (prev.seatStatus === "occupied" && mon.seatStatus !== "occupied") {
+                becameUnseated = true;
                 alertsToSend.push({
                   title: `${w.flight_number} Seat ${mon.seat} Opened — You May Have Been Moved`,
                   msg: `Seat ${mon.seat} changed from occupied to ${mon.seatStatus}. Check your BA boarding pass / app.`,
@@ -779,26 +781,41 @@ export default {
               const prevOcc = new Set(prev.rowOccupied || []);
               const newAdjacent = mon.sectionSeats.filter((s) => s.isAdjacent && s.status === "occupied" && !prevOcc.has(s.seat)).map((s) => s.seat);
               const newOtherRow = mon.sectionSeats.filter((s) => !s.isAdjacent && s.seat !== mon.seat && s.status === "occupied" && !prevOcc.has(s.seat)).map((s) => s.seat);
-              if (newAdjacent.length > 0) {
-                alertsToSend.push({
-                  title: `${w.flight_number} Seat Next to ${mon.seat} Taken (${newAdjacent.join(", ")})`,
-                  msg: `Someone was just assigned ${newAdjacent.join(", ")} right next to your seat ${mon.seat}.`,
-                });
-              } else if (newOtherRow.length > 0) {
-                alertsToSend.push({
-                  title: `${w.flight_number} Row Update Near ${mon.seat} (${newOtherRow.join(", ")} taken)`,
-                  msg: `Seat ${newOtherRow.join(", ")} in your row section was just occupied.`,
-                });
+              if (!becameUnseated) {
+                if (newAdjacent.length > 0) {
+                  alertsToSend.push({
+                    title: `${w.flight_number} Seat Next to ${mon.seat} Taken (${newAdjacent.join(", ")})`,
+                    msg: `Someone was just assigned ${newAdjacent.join(", ")} right next to your seat ${mon.seat}.`,
+                  });
+                } else if (newOtherRow.length > 0) {
+                  alertsToSend.push({
+                    title: `${w.flight_number} Row Update Near ${mon.seat} (${newOtherRow.join(", ")} taken)`,
+                    msg: `Seat ${newOtherRow.join(", ")} in your row section was just occupied.`,
+                  });
+                }
               }
               for (const a of alertsToSend) {
                 await sendSeatMonitorAlert(env, ntfyTopic, w, a.title, a.msg);
               }
             }
-            await updateWatchSeatState(
-              env.DB,
-              w.flight_key,
-              JSON.stringify({ seatStatus: mon.seatStatus, rowOccupied: mon.rowOccupied })
-            );
+            if (becameUnseated) {
+              await updateWatchSeat(
+                env.DB,
+                w.flight_key,
+                null,
+                JSON.stringify({
+                  unseatedFrom: mon.seat,
+                  unseatedStatus: mon.seatStatus,
+                  unseatedAt: new Date().toISOString(),
+                })
+              );
+            } else {
+              await updateWatchSeatState(
+                env.DB,
+                w.flight_key,
+                JSON.stringify({ seatStatus: mon.seatStatus, rowOccupied: mon.rowOccupied })
+              );
+            }
           }
         }
       }

@@ -1008,8 +1008,19 @@ export function renderHtml(): string {
       }
       function renderSeatCell(w) {
         if (!w.assigned_seat) {
-          return '<div style="margin-top:4px;display:flex;gap:4px;align-items:center;">' +
-            '<input id="seat-' + w.flight_key + '" type="text" placeholder="Seat" maxlength="4" style="width:54px;padding:2px 6px;font-size:11px;text-transform:uppercase;" />' +
+          var unseatedHtml = '';
+          if (w.last_seat_state) {
+            try {
+              var st = JSON.parse(w.last_seat_state);
+              if (st && st.unseatedFrom) {
+                unseatedHtml = '<div style="margin-top:4px;">' +
+                  '<span class="pill" style="padding:1px 6px;font-size:10px;color:#fbbf24;border-color:rgba(251,191,36,0.5);background:rgba(251,191,36,0.12);" title="Your previous seat ' + st.unseatedFrom + ' became ' + (st.unseatedStatus || 'open') + '">No seat · was ' + st.unseatedFrom + '</span>' +
+                '</div>';
+              }
+            } catch (e) {}
+          }
+          return unseatedHtml + '<div style="margin-top:4px;display:flex;gap:4px;align-items:center;">' +
+            '<input id="seat-' + w.flight_key + '" type="text" placeholder="' + (unseatedHtml ? 'New seat' : 'Seat') + '" maxlength="4" style="width:62px;padding:2px 6px;font-size:11px;text-transform:uppercase;" />' +
             '<button type="button" class="btn-ghost" style="padding:2px 6px;font-size:10px;" onclick="saveWatchSeat(\\'' + w.flight_key + '\\', false)">Set</button>' +
           '</div>';
         }
