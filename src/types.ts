@@ -107,6 +107,15 @@ export interface InboundFlightInfo {
   flightAwareUrl: string;
 }
 
+export interface SeatMonitorStatus {
+  seat: string;
+  seatStatus: "occupied" | "blocked" | "available";
+  sectionSeats: Array<{ seat: string; letter: string; status: "occupied" | "blocked" | "available"; isAdjacent: boolean }>;
+  adjacentOccupied: string[];
+  rowOccupied: string[];
+  rowOpenCount: number;
+}
+
 export interface WatchedFlight {
   id: number;
   flight_key: string;
@@ -123,10 +132,13 @@ export interface WatchedFlight {
   last_score: number | null;
   alert_stages?: string | null;
   last_inbound_stage?: string | null;
+  assigned_seat?: string | null;
+  last_seat_state?: string | null;
   created_at: string;
   updated_at: string;
   inbound?: InboundFlightInfo | null;
   alertStages?: AlertStages;
+  seatMonitor?: SeatMonitorStatus | null;
 }
 
 export interface SeatSnapshot {

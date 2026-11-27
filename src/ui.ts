@@ -639,6 +639,28 @@ export function renderHtml(): string {
       }
     }
 
+    let latestWatches = [];
+
+    async function saveWatchSeat(flightKey, clearSeat) {
+      var seatVal = "";
+      if (!clearSeat) {
+        var inp = document.getElementById("seat-" + flightKey);
+        seatVal = inp ? inp.value.trim().toUpperCase() : "";
+        if (!seatVal) return;
+      }
+      var res = await fetch("/api/watches/" + encodeURIComponent(flightKey) + "/seat", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignedSeat: seatVal || null })
+      });
+      var data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Invalid seat (e.g. 72A)");
+        return;
+      }
+      loadWatches();
+    }
+
     async function toggleStageAlert(flightKey, stageKey, nextVal) {
       var payload = {};
       payload[stageKey] = nextVal;
@@ -661,6 +683,7 @@ export function renderHtml(): string {
         topicEl.value = data.ntfyTopic;
       }
       const watches = data.watches || [];
+      latestWatches = watches;
       if (watches.length === 0) {
         box.innerHTML = '<span class="subtitle">No flights watched yet. Click <strong>+ Watch Flight</strong> on any search result to track T-24h seat-fill velocity and receive alerts.</span>';
         return;
@@ -748,9 +771,44 @@ export function renderHtml(): string {
           (links ? '<div style="margin-top:3px">' + links + '</div>' : '') +
           renderAlertToggles(w);
       }
+      function renderSeatCell(w) {
+        if (!w.assigned_seat) {
+          return '<div style="margin-top:4px;display:flex;gap:4px;align-items:center;">' +
+            '<input id="seat-' + w.flight_key + '" type="text" placeholder="Seat" maxlength="4" style="width:54px;padding:2px 6px;font-size:11px;text-transform:uppercase;" />' +
+            '<button type="button" class="btn-ghost" style="padding:2px 6px;font-size:10px;" onclick="saveWatchSeat(\\'' + w.flight_key + '\\', false)">Set</button>' +
+          '</div>';
+        }
+        var sm = w.seatMonitor;
+        var rowHtml = '';
+        if (sm && sm.sectionSeats) {
+          var pills = sm.sectionSeats.map(function(s) {
+            var isMe = s.seat === sm.seat;
+            var col = s.status === 'occupied' ? '#93c5fd' : (s.status === 'blocked' ? '#94a3b8' : '#86efac');
+            var bg = isMe ? 'rgba(250,204,21,0.18)' : 'rgba(15,23,42,0.55)';
+            var brd = isMe ? 'rgba(250,204,21,0.75)' : 'rgba(148,163,184,0.25)';
+            var tag = s.status === 'occupied' ? 'occ' : (s.status === 'blocked' ? 'blk' : 'open');
+            return '<span style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid ' + brd + ';background:' + bg + ';color:' + col + ';margin-right:3px;">' + s.seat + ':' + tag + '</span>';
+          }).join('');
+          var warn = '';
+          if (sm.seatStatus !== 'occupied') {
+            warn = '<div style="font-size:10px;color:#f87171;margin-top:2px">⚠ ' + sm.seat + ' is ' + sm.seatStatus + ' (moved?)</div>';
+          } else if (sm.adjacentOccupied.length > 0) {
+            warn = '<div style="font-size:10px;color:#fbbf24;margin-top:2px">⚠ ' + sm.adjacentOccupied.join(', ') + ' occupied next to you</div>';
+          } else if (sm.rowOccupied.length > 0) {
+            warn = '<div style="font-size:10px;color:#cbd5e1;margin-top:2px">' + sm.rowOccupied.join(', ') + ' occ · adjacent spare</div>';
+          } else {
+            warn = '<div style="font-size:10px;color:#4ade80;margin-top:2px">✓ Rest of row open</div>';
+          }
+          rowHtml = '<div style="margin-top:3px">' + pills + '</div>' + warn;
+        }
+        return '<div style="margin-top:4px;display:flex;align-items:center;gap:4px;">' +
+          '<span class="pill" style="padding:1px 6px;font-size:10px;color:#facc15;border-color:rgba(250,204,21,0.5)">Seat ' + w.assigned_seat + '</span>' +
+          '<button type="button" class="btn-ghost" style="padding:1px 5px;font-size:10px;" title="Clear seat" onclick="saveWatchSeat(\\'' + w.flight_key + '\\', true)">×</button>' +
+        '</div>' + rowHtml;
+      }
       box.innerHTML = '<table><thead><tr><th>Flight</th><th>Route</th><th>Date</th><th>Cabin</th><th>Inbound Aircraft</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
         watches.map(w => '<tr>' +
-          '<td><strong>' + w.flight_number + '</strong></td>' +
+          '<td><strong>' + w.flight_number + '</strong>' + renderSeatCell(w) + '</td>' +
           '<td>' + w.origin + ' → ' + w.destination + '</td>' +
           '<td>' + w.departure_date + ' ' + (w.departure_time || '') + '</td>' +
           '<td>' + w.target_cabin + '</td>' +
@@ -807,7 +865,9 @@ export function renderHtml(): string {
         document.getElementById("seatmapBody").innerHTML = '<p class="subtitle">' + (data.error || "No graphical seat map cached yet. It will populate on the next 15-minute ExpertFlyer sync.") + '</p>';
         return;
       }
-      document.getElementById("seatmapTitle").textContent = flightNum + (data.aircraft ? " (" + data.aircraft + ")" : "") + " — Captured " + (data.captured_at || "") + " UTC";
+      const watchMatch = latestWatches.find(function(x) { return x.flight_key === flightKey; });
+      const mySeat = watchMatch && watchMatch.assigned_seat ? watchMatch.assigned_seat.toUpperCase() : '';
+      document.getElementById("seatmapTitle").textContent = flightNum + (data.aircraft ? " (" + data.aircraft + ")" : "") + (mySeat ? " · My Seat " + mySeat : "") + " — Captured " + (data.captured_at || "") + " UTC";
       const cabinNames = { first: "First (F)", business: "Business / Club (J)", prem_econ: "Premium Economy (W)", economy: "Economy (Y)" };
       document.getElementById("seatmapBody").innerHTML = data.seatmap.sections.map(function(sec) {
         const rowsHtml = (sec.rows || []).map(function(row) {
@@ -815,10 +875,13 @@ export function renderHtml(): string {
             if (cell.t !== "s") {
               return '<span class="sm-aisle"></span>';
             }
+            const seatLabel = String(row.n) + String(cell.l || "").toUpperCase();
+            const isMine = mySeat && seatLabel === mySeat;
             const statusName = cell.s === "a" ? (cell.p ? "Available (Paid/Pref)" : "Available") : (cell.s === "o" ? "Occupied" : "Blocked");
             const cls = cell.s === "a" ? (cell.p ? "sm-seat sm-p" : "sm-seat sm-a") : (cell.s === "o" ? "sm-seat sm-o" : "sm-seat sm-b");
             const txt = cell.s === "o" ? "×" : (cell.s === "b" ? "X" : (cell.l || ""));
-            return '<span class="' + cls + '" title="Seat ' + row.n + (cell.l || "") + ' — ' + statusName + '">' + txt + '</span>';
+            const mineStyle = isMine ? ' style="box-shadow:0 0 0 2px #facc15;border-color:#facc15;"' : '';
+            return '<span class="' + cls + '"' + mineStyle + ' title="Seat ' + seatLabel + (isMine ? ' (YOUR SEAT)' : '') + ' — ' + statusName + '">' + txt + '</span>';
           }).join("");
           const exL = row.el ? '<span class="sm-exit">EXIT</span>' : '';
           const exR = row.er ? '<span class="sm-exit">EXIT</span>' : '';

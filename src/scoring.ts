@@ -6,6 +6,7 @@ import type {
   FareBuckets,
   ReadinessLevel,
   RouteDisruption,
+  SeatMonitorStatus,
 } from "./types.ts";
 
 /**
@@ -321,4 +322,78 @@ export function computeEconomySeatStats(
     windowAvailable,
     aisleAvailable,
   };
+}
+
+export function inspectAssignedSeat(
+  seatmapInput: string | { sections?: Array<{ cabin?: string; rows?: Array<{ n?: number; seats?: Array<{ t?: string; l?: string; s?: string }> }> }> } | null | undefined,
+  assignedSeat: string | null | undefined
+): SeatMonitorStatus | null {
+  if (!seatmapInput || !assignedSeat) return null;
+  const clean = assignedSeat.trim().toUpperCase();
+  const m = clean.match(/^(\d{1,3})([A-Z])$/);
+  if (!m) return null;
+  const rowNum = Number(m[1]);
+  const letter = m[2];
+
+  let parsed: { sections?: Array<{ cabin?: string; rows?: Array<{ n?: number; seats?: Array<{ t?: string; l?: string; s?: string }> }> }> };
+  try {
+    parsed = typeof seatmapInput === "string" ? JSON.parse(seatmapInput) : seatmapInput;
+  } catch {
+    return null;
+  }
+
+  const mapStatus = (s?: string): "occupied" | "blocked" | "available" =>
+    s === "o" ? "occupied" : s === "b" ? "blocked" : "available";
+
+  for (const sec of parsed.sections ?? []) {
+    for (const row of sec.rows ?? []) {
+      if (row.n !== rowNum) continue;
+      const groups: Array<Array<{ l: string; s: string }>> = [];
+      let current: Array<{ l: string; s: string }> = [];
+      for (const cell of row.seats ?? []) {
+        if (cell.t === "s" && cell.l) {
+          current.push({ l: cell.l.toUpperCase(), s: cell.s || "a" });
+        } else if (current.length > 0) {
+          groups.push(current);
+          current = [];
+        }
+      }
+      if (current.length > 0) groups.push(current);
+
+      for (const group of groups) {
+        const idx = group.findIndex((c) => c.l === letter);
+        if (idx === -1) continue;
+
+        const seatStatus = mapStatus(group[idx].s);
+        const adjacentOccupied: string[] = [];
+        const rowOccupied: string[] = [];
+        let rowOpenCount = 0;
+
+        const sectionSeats = group.map((c, i) => {
+          const st = mapStatus(c.s);
+          const seatLabel = `${rowNum}${c.l}`;
+          const isAdjacent = Math.abs(i - idx) === 1;
+          if (i !== idx) {
+            if (st === "occupied") {
+              rowOccupied.push(seatLabel);
+              if (isAdjacent) adjacentOccupied.push(seatLabel);
+            } else {
+              rowOpenCount++;
+            }
+          }
+          return { seat: seatLabel, letter: c.l, status: st, isAdjacent };
+        });
+
+        return {
+          seat: clean,
+          seatStatus,
+          sectionSeats,
+          adjacentOccupied,
+          rowOccupied,
+          rowOpenCount,
+        };
+      }
+    }
+  }
+  return null;
 }

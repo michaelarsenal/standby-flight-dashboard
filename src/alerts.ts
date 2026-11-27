@@ -79,6 +79,43 @@ export async function sendStagePushAlert(
   return sent;
 }
 
+export async function sendSeatMonitorAlert(
+  env: Env,
+  ntfyTopic: string | null,
+  watch: WatchedFlight,
+  title: string,
+  message: string
+): Promise<boolean> {
+  const topic = ntfyTopic || env.NTFY_TOPIC || "";
+  let sent = false;
+  if (topic) {
+    sent = await sendNtfyPush(topic, title, message, {
+      priority: "high",
+      tags: "seat,warning",
+    });
+  }
+
+  if (env.RESEND_API_KEY && env.ALERT_EMAIL_TO) {
+    const from = env.ALERT_EMAIL_FROM || "Standby Monitor <onboarding@resend.dev>";
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to: env.ALERT_EMAIL_TO.split(",").map((s) => s.trim()),
+        subject: title,
+        html: `<p><strong>${title}</strong></p><p>${message.replace(/\n/g, "<br/>")}</p><p>Flight: ${watch.flight_number} (${watch.origin} → ${watch.destination}) on ${watch.departure_date}</p>`,
+      }),
+    });
+    if (res.ok) sent = true;
+  }
+
+  return sent;
+}
+
 export async function sendStandbyAlert(
   env: Env,
   flight: FlightCandidate,

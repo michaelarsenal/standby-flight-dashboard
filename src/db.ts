@@ -68,6 +68,8 @@ export async function ensureSchema(db: D1Database): Promise<void> {
   for (const col of [
     "ALTER TABLE watches ADD COLUMN alert_stages TEXT",
     "ALTER TABLE watches ADD COLUMN last_inbound_stage TEXT",
+    "ALTER TABLE watches ADD COLUMN assigned_seat TEXT",
+    "ALTER TABLE watches ADD COLUMN last_seat_state TEXT",
   ]) {
     try {
       await db.prepare(col).run();
@@ -185,6 +187,31 @@ export async function updateWatchInboundStage(
   await db
     .prepare("UPDATE watches SET last_inbound_stage = ?, updated_at = datetime('now') WHERE flight_key = ?")
     .bind(stageKey, flightKey)
+    .run();
+}
+
+export async function updateWatchSeat(
+  db: D1Database,
+  flightKey: string,
+  assignedSeat: string | null,
+  lastSeatState: string | null = null
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET assigned_seat = ?, last_seat_state = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(assignedSeat, lastSeatState, flightKey)
+    .run();
+}
+
+export async function updateWatchSeatState(
+  db: D1Database,
+  flightKey: string,
+  lastSeatState: string | null
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE watches SET last_seat_state = ?, updated_at = datetime('now') WHERE flight_key = ?")
+    .bind(lastSeatState, flightKey)
     .run();
 }
 

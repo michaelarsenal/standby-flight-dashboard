@@ -1,5 +1,5 @@
 import { expandAirportInput } from "./airports.ts";
-import { sendNtfyPush, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
+import { sendNtfyPush, sendSeatMonitorAlert, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
 import {
   deleteWatch,
   getEfSeatmap,
@@ -14,6 +14,8 @@ import {
   setSetting,
   updateWatchAlerts,
   updateWatchInboundStage,
+  updateWatchSeat,
+  updateWatchSeatState,
   updateWatchStatus,
   upsertEfFlights,
   upsertEfSeatmap,
@@ -33,6 +35,7 @@ import {
   computeEconomySeatStats,
   computePredictiveDisruptionRisk,
   computeStandbyScore,
+  inspectAssignedSeat,
   parseFareBuckets,
 } from "./scoring.ts";
 import type { AlertStages, CabinKey, CabinSeatSummary, Env, FlightCandidate, RouteDisruption, SeatSnapshot } from "./types.ts";
@@ -456,6 +459,33 @@ export default {
       return jsonResponse({ ok: true, alertStages: updated });
     }
 
+    if (path.startsWith("/api/watches/") && path.endsWith("/seat") && (request.method === "PATCH" || request.method === "POST")) {
+      if (!env.DB) return jsonResponse({ error: "D1 database not bound" }, 500);
+      const flightKey = decodeURIComponent(path.slice("/api/watches/".length, -"/seat".length));
+      const body = (await request.json()) as { assignedSeat?: string | null };
+      const rawSeat = String(body.assignedSeat || "").trim().toUpperCase();
+      if (rawSeat && !/^\d{1,3}[A-Z]$/.test(rawSeat)) {
+        return jsonResponse({ error: "Invalid seat format (e.g. 72A)" }, 400);
+      }
+      const assignedSeat = rawSeat || null;
+      let seatMonitor = null;
+      let stateJson: string | null = null;
+      if (assignedSeat) {
+        const smRow = await getEfSeatmap(env.DB, flightKey);
+        if (smRow?.seatmap_json) {
+          seatMonitor = inspectAssignedSeat(smRow.seatmap_json, assignedSeat);
+          if (seatMonitor) {
+            stateJson = JSON.stringify({
+              seatStatus: seatMonitor.seatStatus,
+              rowOccupied: seatMonitor.rowOccupied,
+            });
+          }
+        }
+      }
+      await updateWatchSeat(env.DB, flightKey, assignedSeat, stateJson);
+      return jsonResponse({ ok: true, assignedSeat, seatMonitor });
+    }
+
     if (path === "/api/watches" && request.method === "GET") {
       if (!env.DB) return jsonResponse({ watches: [], ntfyTopic: env.NTFY_TOPIC || "" });
       const [watches, savedTopic, efMap] = await Promise.all([
@@ -463,6 +493,8 @@ export default {
         getSetting(env.DB, "ntfy_topic"),
         getLatestExpertFlyerSnapshots(env.DB),
       ]);
+      const seatKeys = watches.filter((w) => w.assigned_seat).map((w) => w.flight_key);
+      const seatmapMap = seatKeys.length > 0 ? await getEfSeatmapsByKeys(env.DB, seatKeys) : new Map<string, string>();
       const ntfyTopic = savedTopic || env.NTFY_TOPIC || "";
       const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
       const enriched = await Promise.all(
@@ -489,6 +521,10 @@ export default {
               await updateWatchStatus(env.DB!, w.flight_key, rescored.readiness, rescored.score);
             }
             nextWatch = { ...w, last_status: rescored.readiness, last_score: rescored.score };
+          }
+          if (w.assigned_seat) {
+            const seatMonitor = inspectAssignedSeat(seatmapMap.get(w.flight_key), w.assigned_seat);
+            nextWatch = { ...nextWatch, seatMonitor };
           }
           if (!env.FLIGHTAWARE_API_KEY || w.departure_date < cutoff) return nextWatch;
           try {
@@ -669,6 +705,48 @@ export default {
           );
         }
         await updateWatchStatus(env.DB, w.flight_key, rescored.readiness, rescored.score);
+
+        if (w.assigned_seat && body.seatmap) {
+          const mon = inspectAssignedSeat(body.seatmap, w.assigned_seat);
+          if (mon) {
+            const ntfyTopic = await getSetting(env.DB, "ntfy_topic");
+            let prev: { seatStatus?: string; rowOccupied?: string[] } | null = null;
+            if (w.last_seat_state) {
+              try { prev = JSON.parse(w.last_seat_state); } catch {}
+            }
+            if (prev) {
+              const alertsToSend: Array<{ title: string; msg: string }> = [];
+              if (prev.seatStatus === "occupied" && mon.seatStatus !== "occupied") {
+                alertsToSend.push({
+                  title: `${w.flight_number} Seat ${mon.seat} Opened — You May Have Been Moved`,
+                  msg: `Seat ${mon.seat} changed from occupied to ${mon.seatStatus}. Check your BA boarding pass / app.`,
+                });
+              }
+              const prevOcc = new Set(prev.rowOccupied || []);
+              const newAdjacent = mon.sectionSeats.filter((s) => s.isAdjacent && s.status === "occupied" && !prevOcc.has(s.seat)).map((s) => s.seat);
+              const newOtherRow = mon.sectionSeats.filter((s) => !s.isAdjacent && s.seat !== mon.seat && s.status === "occupied" && !prevOcc.has(s.seat)).map((s) => s.seat);
+              if (newAdjacent.length > 0) {
+                alertsToSend.push({
+                  title: `${w.flight_number} Seat Next to ${mon.seat} Taken (${newAdjacent.join(", ")})`,
+                  msg: `Someone was just assigned ${newAdjacent.join(", ")} right next to your seat ${mon.seat}.`,
+                });
+              } else if (newOtherRow.length > 0) {
+                alertsToSend.push({
+                  title: `${w.flight_number} Row Update Near ${mon.seat} (${newOtherRow.join(", ")} taken)`,
+                  msg: `Seat ${newOtherRow.join(", ")} in your row section was just occupied.`,
+                });
+              }
+              for (const a of alertsToSend) {
+                await sendSeatMonitorAlert(env, ntfyTopic, w, a.title, a.msg);
+              }
+            }
+            await updateWatchSeatState(
+              env.DB,
+              w.flight_key,
+              JSON.stringify({ seatStatus: mon.seatStatus, rowOccupied: mon.rowOccupied })
+            );
+          }
+        }
       }
 
       return jsonResponse({
