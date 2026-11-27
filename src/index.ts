@@ -711,10 +711,89 @@ export default {
         });
       }
 
+      const [prevEfMap, prevSeatmapRow] = await Promise.all([
+        getLatestExpertFlyerSnapshots(env.DB),
+        getEfSeatmap(env.DB, body.flightKey),
+      ]);
+      const prevSnap = prevEfMap.get(body.flightKey);
+      const mergedCabins: Record<CabinKey, CabinSeatSummary> = {
+        first: { ...body.cabins.first },
+        business: { ...body.cabins.business },
+        prem_econ: { ...body.cabins.prem_econ },
+        economy: { ...body.cabins.economy },
+      };
+      const preservedCabins: string[] = [];
+      if (prevSnap) {
+        if (mergedCabins.first.total === 0 && prevSnap.first_total > 0) {
+          mergedCabins.first = {
+            available: prevSnap.first_available,
+            occupied: prevSnap.first_occupied,
+            blocked: prevSnap.first_blocked,
+            total: prevSnap.first_total,
+          };
+          preservedCabins.push("F");
+        }
+        if (mergedCabins.business.total === 0 && prevSnap.business_total > 0) {
+          mergedCabins.business = {
+            available: prevSnap.business_available,
+            occupied: prevSnap.business_occupied,
+            blocked: prevSnap.business_blocked,
+            total: prevSnap.business_total,
+          };
+          preservedCabins.push("J");
+        }
+        if (mergedCabins.prem_econ.total === 0 && prevSnap.prem_econ_total > 0) {
+          mergedCabins.prem_econ = {
+            available: prevSnap.prem_econ_available,
+            occupied: prevSnap.prem_econ_occupied,
+            blocked: prevSnap.prem_econ_blocked,
+            total: prevSnap.prem_econ_total,
+          };
+          preservedCabins.push("W");
+        }
+        if (mergedCabins.economy.total === 0 && prevSnap.economy_total > 0) {
+          mergedCabins.economy = {
+            available: prevSnap.economy_available,
+            occupied: prevSnap.economy_occupied,
+            blocked: prevSnap.economy_blocked,
+            total: prevSnap.economy_total,
+          };
+          preservedCabins.push("Y");
+        }
+      }
+
+      let mergedSeatmap = body.seatmap;
+      if (mergedSeatmap && Array.isArray(mergedSeatmap.sections) && prevSeatmapRow?.seatmap_json) {
+        try {
+          const prevSm = JSON.parse(prevSeatmapRow.seatmap_json) as { sections?: Array<{ cabin?: string; rows?: unknown[] }> };
+          const prevSections = prevSm.sections || [];
+          const curByCabin = new Map<string, any>();
+          for (const sec of mergedSeatmap.sections as Array<{ cabin?: string; rows?: unknown[] }>) {
+            if (sec?.cabin && (sec.rows?.length || 0) > 0) {
+              curByCabin.set(sec.cabin, sec);
+            }
+          }
+          const prevByCabin = new Map<string, any>();
+          for (const sec of prevSections) {
+            if (sec?.cabin && (sec.rows?.length || 0) > 0) {
+              prevByCabin.set(sec.cabin, sec);
+            }
+          }
+          const orderedSections: any[] = [];
+          for (const cKey of ["first", "business", "prem_econ", "economy"]) {
+            if (curByCabin.has(cKey)) orderedSections.push(curByCabin.get(cKey));
+            else if (prevByCabin.has(cKey)) orderedSections.push(prevByCabin.get(cKey));
+          }
+          if (orderedSections.length > 0) {
+            mergedSeatmap = { ...mergedSeatmap, sections: orderedSections };
+          }
+        } catch {}
+      }
+
       const fareBuckets = parseFareBuckets(w?.ef_buckets || body.efBuckets || null, airline);
       const hrs = hoursUntilDeparture(departureDate, departureTime);
       const rescored = computeStandbyScore({
-        cabins: body.cabins,
+        cabins: mergedCabins,
         targetCabin: ((w?.target_cabin || "economy") as CabinKey),
         fareBuckets,
         disruptions: [],
@@ -733,7 +812,7 @@ export default {
         duration: "",
         aircraft: body.aircraft || w?.aircraft || "",
         dataSource: "live",
-        cabins: body.cabins,
+        cabins: mergedCabins,
         fareBuckets,
         disruptions: [],
         standbyScore: rescored.score,
@@ -742,11 +821,12 @@ export default {
         watched: Boolean(w),
       };
 
-      const note = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
-      const economyComfort = body.seatmap ? computeEconomySeatStats(body.seatmap) : null;
+      const baseNote = body.note || (hrs !== null && hrs <= 1.6 ? "ExpertFlyer pre-close seat map" : "ExpertFlyer seat map");
+      const note = preservedCabins.length > 0 ? `${baseNote} (preserved ${preservedCabins.join(",")})` : baseNote;
+      const economyComfort = mergedSeatmap ? computeEconomySeatStats(mergedSeatmap) : null;
       await recordSnapshot(env.DB, candidate, hrs, note, economyComfort);
-      if (body.seatmap) {
-        await upsertEfSeatmap(env.DB, body.flightKey, candidate.aircraft, body.seatmap);
+      if (mergedSeatmap) {
+        await upsertEfSeatmap(env.DB, body.flightKey, candidate.aircraft, mergedSeatmap);
       }
 
       if (w) {
@@ -760,8 +840,8 @@ export default {
         }
         await updateWatchStatus(env.DB, w.flight_key, rescored.readiness, rescored.score);
 
-        if (w.assigned_seat && body.seatmap) {
-          const mon = inspectAssignedSeat(body.seatmap, w.assigned_seat);
+        if (w.assigned_seat && mergedSeatmap) {
+          const mon = inspectAssignedSeat(mergedSeatmap, w.assigned_seat);
           if (mon) {
             const ntfyTopic = await getSetting(env.DB, "ntfy_topic");
             let prev: { seatStatus?: string; rowOccupied?: string[] } | null = null;
