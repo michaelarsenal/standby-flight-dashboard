@@ -55,7 +55,7 @@ def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
     if hrs > 336.0:
         return False, hrs, ">14d out"
 
-    updated_raw = str(watch.get("updated_at") or "").strip()
+    updated_raw = str(watch.get("lastSeatmapAt") or watch.get("updated_at") or "").strip()
     age_mins = 9999.0
     if updated_raw:
         try:

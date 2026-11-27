@@ -322,7 +322,10 @@ export function renderHtml(): string {
         <h1>Standby Flight Dashboard</h1>
         <div class="subtitle">British Airways &amp; Virgin Atlantic — Seat Map Velocity &amp; Route Disruption Monitor</div>
       </div>
-      <div id="modeBadge" class="pill">Checking API mode...</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button type="button" class="btn-ghost" onclick="openFaq()" style="padding:5px 12px;font-size:12px;">FAQ</button>
+        <div id="modeBadge" class="pill">Checking API mode...</div>
+      </div>
     </header>
 
     <div class="card">
@@ -447,7 +450,67 @@ export function renderHtml(): string {
     </div>
   </div>
 
+  <div id="faqModal" class="modal-backdrop">
+    <div class="modal" style="max-width:740px">
+      <div class="section-title">
+        <span>Standby Flight Dashboard — FAQ &amp; Data Sources</span>
+        <button class="btn-ghost" onclick="closeFaq()">Close</button>
+      </div>
+      <div style="font-size:12.5px;line-height:1.55;color:#cbd5e1;display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <strong style="color:#7dd3fc">1. How is the Standby Score calculated?</strong>
+          <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
+            <li>Starts at <strong>50</strong> baseline. Thresholds: <strong>GREEN</strong> (LOOKING GOOD) ≥ 70, <strong>AMBER</strong> (CAUTION) 45–69, <strong>RED</strong> (TIGHT) &lt; 45.</li>
+            <li><strong>Target Cabin Open Seats (Available + Blocked):</strong> ≥25 seats or ≥28% open (+22), 10–24 (+8), 4–9 (-8), ≤3 (-24).</li>
+            <li><strong>Free vs Blocked Quality:</strong> ≥15 free available seats or ≥50% free (+5); all open seats blocked (-8).</li>
+            <li><strong>Cross-Cabin Buffer:</strong> ≥45 open seats across all cabins (+8).</li>
+            <li><strong>Fare Bucket Cross-Check:</strong> Max bucket 9 (+18, +6 extra if ≥20 free seats), 5–8 (+8), 3–4 (-8), 0–2 (-22, -14 extra if ≥20 unassigned seats indicating unseated bookings).</li>
+            <li><strong>Velocity &amp; Disruptions:</strong> Rapid fill ≥4 seats/hr (-15), route cancellations/delays, and 45% of predictive weather/hub/inbound risk (up to -20).</li>
+          </ul>
+        </div>
+        <div>
+          <strong style="color:#7dd3fc">2. ExpertFlyer (EF) Refresh Intervals</strong>
+          <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
+            <li>Triggered via GitHub Actions (<code>expertflyer-sync.yml</code>) every <strong>5 minutes</strong>; skips login if no watched flight is due.</li>
+            <li><strong>Inside T-2h</strong> (2h before to 5h after scheduled departure): every <strong>5 minutes</strong>.</li>
+            <li><strong>T-24h to T-2h:</strong> every <strong>15 minutes</strong>. <strong>T-14d to T-24h:</strong> every <strong>3 hours</strong>.</li>
+            <li><em>Note:</em> GitHub Actions <code>schedule</code> triggers can be delayed or coalesced up to ~60 minutes during peak GitHub queue times. If EF locks a seat map at check-in close, the dashboard preserves the last-known-good snapshot.</li>
+          </ul>
+        </div>
+        <div>
+          <strong style="color:#7dd3fc">3. FlightAware (FA) &amp; FlightRadar24 (FR24) Refresh Intervals</strong>
+          <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
+            <li><strong>Cloudflare Worker Cron:</strong> Runs every <strong>1 minute</strong> when a watched flight is inside T-8h or its inbound aircraft is active (<code>Pushback</code>, <code>Taxiing</code>, <code>Enroute</code>, <code>Landed</code>, <code>Diverted</code>), and every <strong>5 minutes</strong> outside that window.</li>
+            <li><strong>Live Dashboard Refresh:</strong> Clicking <strong>Refresh</strong> on Watched Flights queries FlightAware live immediately.</li>
+            <li><strong>FR24 Links:</strong> Shows <strong>● FR24 Live</strong> once ADS-B / OOOI pushback (<code>actual_out</code>) is active; before pushback it links to FR24's flight schedule/history page.</li>
+          </ul>
+        </div>
+        <div>
+          <strong style="color:#7dd3fc">4. How Arrival &amp; Departure Disruption is Calculated</strong>
+          <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
+            <li><strong>Departure Ground Congestion:</strong> Queries FA airport delays + scheduled/active departures in a ±30m window. Rates <strong>Light</strong> (~12m taxi), <strong>Moderate</strong> (~18m taxi, ≥10 dep/30m or +12m avg delay), or <strong>Heavy</strong> (~25–45m taxi, ≥18 dep/30m or +25m avg delay).</li>
+            <li><strong>Arrival Congestion &amp; Weather:</strong> Combines FA destination airport average delays with Open-Meteo wind/fog/precipitation forecasts (Light / Moderate / Heavy).</li>
+            <li><strong>Inbound Turnaround Impact:</strong> Compares inbound ETA vs outbound ETD: &lt;55m turnaround or ≥45m late = High risk; &lt;85m or ≥15m late = Watch.</li>
+          </ul>
+        </div>
+        <div>
+          <strong style="color:#7dd3fc">5. Source Datafeeds</strong>
+          <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
+            <li><strong>Flight Schedules &amp; Fallback Seat Maps:</strong> Duffel API</li>
+            <li><strong>Detailed Seat Maps, Occupied/Blocked Counts &amp; Fare Buckets:</strong> ExpertFlyer (cached in Cloudflare D1)</li>
+            <li><strong>Live Inbound/Outbound Telemetry, Gates, Delays, ADS-B Stages &amp; Airport Delays:</strong> FlightAware AeroAPI v4</li>
+            <li><strong>Airport Weather Forecasts:</strong> Open-Meteo API</li>
+            <li><strong>Live Radar Links:</strong> FlightRadar24 &amp; FlightAware</li>
+            <li><strong>Alerts:</strong> Push notifications via <code>ntfy.sh</code> &amp; Email via Resend</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
+    function openFaq() { document.getElementById("faqModal").classList.add("open"); }
+    function closeFaq() { document.getElementById("faqModal").classList.remove("open"); }
     const dateInput = document.getElementById("date");
     const todayLocal = new Date();
     const yyyy = todayLocal.getFullYear();
