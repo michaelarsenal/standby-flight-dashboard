@@ -60,7 +60,7 @@ def hours_until_departure(dep_date: str, dep_time: str | None, origin: str | Non
 
 
 def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
-    hrs = hours_until_departure(watch.get("departure_date", ""), watch.get("departure_time"))
+    hrs = hours_until_departure(watch.get("departure_date", ""), watch.get("departure_time"), watch.get("origin"))
     if hrs is None:
         return False, None, "invalid date"
     if hrs < -6.0:
@@ -431,42 +431,54 @@ def run_sync_session(
             else route.continue_(),
         )
 
-        captured: dict[str, str] = {"avail": "", "seat": ""}
+        captured: dict[str, Any] = {"avail": "", "avail_status": 0, "seat": "", "seat_status": 0}
 
         def on_resp(r: Any) -> None:
             if r.request.method != "POST":
                 return
             try:
                 if "/air/availability/results" in r.url:
+                    captured["avail_status"] = r.status
                     txt = r.text()
                     if len(txt) > len(captured["avail"]):
                         captured["avail"] = txt
                 elif "/air/seat-map/results" in r.url:
+                    captured["seat_status"] = r.status
                     txt = r.text()
                     if len(txt) > len(captured["seat"]):
                         captured["seat"] = txt
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[on_resp] {r.url} error: {e}", file=sys.stderr)
 
         page.on("response", on_resp)
 
-        page.goto(
-            "https://www.expertflyer.com/sign-in?redirect_url=%2Fair%2Favailability",
-            wait_until="domcontentloaded",
-            timeout=25000,
-        )
-        page.wait_for_selector("#clerk-sign-in-email", timeout=15000)
-        page.fill("#clerk-sign-in-email", email)
-        page.fill("#clerk-sign-in-password", password)
-        page.locator("button[type=submit]").first.click()
-        for _ in range(25):
-            if "/sign-in" not in page.url:
-                break
-            page.wait_for_timeout(1000)
-        page.wait_for_timeout(2000)
+        def sign_in(redirect_path: str = "/air/availability") -> bool:
+            for attempt in (1, 2):
+                page.goto(
+                    f"https://www.expertflyer.com/sign-in?redirect_url={urllib.parse.quote(redirect_path, safe='')}",
+                    wait_until="domcontentloaded",
+                    timeout=25000,
+                )
+                page.wait_for_selector("#clerk-sign-in-email", timeout=15000)
+                page.fill("#clerk-sign-in-email", email)
+                page.fill("#clerk-sign-in-password", password)
+                page.wait_for_timeout(300)
+                page.locator("button[type=submit]").first.click()
+                for _ in range(25):
+                    if "/sign-in" not in page.url:
+                        break
+                    page.wait_for_timeout(1000)
+                page.wait_for_timeout(2000)
+                print(f"[auth] attempt={attempt} post-login url={page.url}")
+                if "/sign-in" not in page.url:
+                    return True
+            return False
+
+        sign_in("/air/availability")
 
         for q in avail_queries:
             captured["avail"] = ""
+            captured["avail_status"] = 0
             u = "https://www.expertflyer.com/air/availability/results?" + urllib.parse.urlencode(
                 {
                     "origin": q["origin"],
@@ -479,13 +491,34 @@ def run_sync_session(
                     "resultsDisplay": "tabbed",
                 }
             )
-            page.goto(u, wait_until="domcontentloaded", timeout=25000)
-            page.wait_for_timeout(7000)
-            all_flights.extend(parse_availability_payload(captured["avail"], q["departure_date"]))
+            try:
+                page.goto(u, wait_until="domcontentloaded", timeout=25000)
+                for _ in range(24):
+                    if '"searchResults"' in captured["avail"] or "/sign-in" in page.url:
+                        break
+                    page.wait_for_timeout(500)
+                if "/sign-in" in page.url:
+                    print(f"[availability] {q['origin']}-{q['destination']} {q['departure_date']} redirected to sign-in; re-authenticating")
+                    if sign_in("/air/availability"):
+                        captured["avail"] = ""
+                        captured["avail_status"] = 0
+                        page.goto(u, wait_until="domcontentloaded", timeout=25000)
+                        for _ in range(24):
+                            if '"searchResults"' in captured["avail"]:
+                                break
+                            page.wait_for_timeout(500)
+                parsed_avail = parse_availability_payload(captured["avail"], q["departure_date"])
+                if not parsed_avail:
+                    print(
+                        f"[availability] {q['origin']}-{q['destination']} {q['departure_date']} "
+                        f"empty (status={captured['avail_status']}, bytes={len(captured['avail'])}, url={page.url})"
+                    )
+                all_flights.extend(parsed_avail)
+            except Exception as e:
+                print(f"[availability] {q['origin']}-{q['destination']} {q['departure_date']} warning: {e}", file=sys.stderr)
 
         seat_queries = build_seatmap_queries(all_flights)
         for q in seat_queries:
-            captured["seat"] = ""
             target_url = (
                 "https://www.expertflyer.com/air/seat-map/results?"
                 + urllib.parse.urlencode(
@@ -502,13 +535,34 @@ def run_sync_session(
                     }
                 )
             )
-            try:
-                page.goto(target_url, wait_until="commit", timeout=35000)
-                page.wait_for_timeout(8000)
-                parsed = parse_seatmap_payload(captured["seat"])
-            except Exception as e:
-                print(f"[seatmap] {q['flightKey']} warning: {e}", file=sys.stderr)
-                parsed = None
+            parsed = None
+            for attempt in (1, 2):
+                captured["seat"] = ""
+                captured["seat_status"] = 0
+                try:
+                    page.goto(target_url, wait_until="commit", timeout=35000)
+                    for _ in range(32):
+                        if '"seatMap"' in captured["seat"] or "/sign-in" in page.url:
+                            break
+                        page.wait_for_timeout(500)
+                    if "/sign-in" in page.url:
+                        print(f"[seatmap] {q['flightKey']} redirected to sign-in; re-authenticating")
+                        if sign_in("/air/seat-map"):
+                            continue
+                    # Give a brief moment for any trailing chunks if seatMap just appeared
+                    if '"seatMap"' in captured["seat"]:
+                        page.wait_for_timeout(500)
+                    parsed = parse_seatmap_payload(captured["seat"])
+                    if parsed is not None:
+                        break
+                    print(
+                        f"[seatmap] {q['flightKey']} attempt={attempt} unavailable "
+                        f"(status={captured['seat_status']}, bytes={len(captured['seat'])}, url={page.url})"
+                    )
+                except Exception as e:
+                    print(f"[seatmap] {q['flightKey']} attempt={attempt} warning: {e}", file=sys.stderr)
+                if attempt == 1:
+                    page.wait_for_timeout(2000)
             seatmap_results.append({"query": q, "parsed": parsed})
 
         browser.close()
@@ -517,6 +571,8 @@ def run_sync_session(
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(description="Sync ExpertFlyer seat maps to standby-flight-dashboard.")
     parser.add_argument("--worker-url", default=os.environ.get("STANDBY_WORKER_URL") or DEFAULT_WORKER_URL)
     parser.add_argument("--flight", help="Optional single flight e.g. BA292")
@@ -650,7 +706,7 @@ def main() -> int:
             fk = af["flight_key"]
             if fk in queued_keys:
                 continue
-            hrs = hours_until_departure(af["departure_date"], af.get("departure_time"))
+            hrs = hours_until_departure(af["departure_date"], af.get("departure_time"), af.get("origin"))
             if hrs is None or hrs < 0.8 or hrs > 48.0:
                 continue
             try:
