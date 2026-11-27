@@ -41,6 +41,8 @@ export function buildFlightKey(
   destination: string,
   departureDate: string
 ): string {
+  const code = airline.toUpperCase();
   const cleanNum = flightNumber.replace(/\s+/g, "").toUpperCase();
-  return `${airline.toUpperCase()}-${cleanNum}-${origin.toUpperCase()}-${destination.toUpperCase()}-${departureDate}`;
+  const fullNum = cleanNum.startsWith(code) ? cleanNum : `${code}${cleanNum}`;
+  return `${fullNum}-${origin.toUpperCase()}-${destination.toUpperCase()}-${departureDate}`;
 }

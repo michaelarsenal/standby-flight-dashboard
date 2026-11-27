@@ -535,6 +535,15 @@ export function renderHtml(): string {
     }
 
     let efPollTimer = null;
+    let efClockTimer = null;
+    let searchStartedAt = 0;
+
+    function fmtElapsed(ms) {
+      const secs = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    }
 
     function saveSearchState(metaText) {
       try {
@@ -549,12 +558,13 @@ export function renderHtml(): string {
           candidates: latestCandidates,
           metaText: metaText || document.getElementById("resultsMeta").textContent || "",
           date: document.getElementById("date").value,
-          targetCabin: document.getElementById("targetCabin").value
+          targetCabin: document.getElementById("targetCabin").value,
+          startedAt: searchStartedAt || Date.now()
         }));
       } catch (e) {}
     }
 
-    function renderSearchProgress(steps) {
+    function renderSearchProgress(steps, showClock) {
       const el = document.getElementById("searchProgress");
       if (!el) return;
       if (!steps || steps.length === 0) {
@@ -563,19 +573,29 @@ export function renderHtml(): string {
         return;
       }
       el.style.display = "block";
+      const elapsedStr = searchStartedAt ? fmtElapsed(Date.now() - searchStartedAt) : "00:00";
+      const clockHtml = showClock
+        ? '<span style="margin-left:auto;color:#94a3b8;font-variant-numeric:tabular-nums;">Elapsed: <strong id="efElapsed" style="color:#e2e8f0">' + elapsedStr + '</strong> · est. ~1–2m</span>'
+        : '';
       el.innerHTML = '<div class="card" style="padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;font-size:12px;border-color:rgba(56,189,248,0.35);background:rgba(15,23,42,0.72);">' +
         steps.map(function(st) {
           var icon = st.done ? '<span style="color:#4ade80;font-weight:700">✓</span>' : '<span style="color:#38bdf8;font-weight:700">⟳</span>';
           var col = st.done ? '#cbd5e1' : '#7dd3fc';
           return '<span style="color:' + col + '">' + icon + ' ' + st.label + '</span>';
         }).join('') +
+        clockHtml +
       '</div>';
+    }
+
+    function stopEfTimers() {
+      if (efPollTimer) { clearInterval(efPollTimer); efPollTimer = null; }
+      if (efClockTimer) { clearInterval(efClockTimer); efClockTimer = null; }
     }
 
     function updateProgressFromCandidates(isPolling, pollCount) {
       const total = latestCandidates.length;
       if (total === 0) {
-        renderSearchProgress([]);
+        renderSearchProgress([], false);
         return false;
       }
       const bucketsDone = latestCandidates.filter(function(c) { return Boolean(c.fareBuckets); }).length;
@@ -588,26 +608,27 @@ export function renderHtml(): string {
         { done: bucketsDone === total, label: bucketsDone === total ? "EF fare buckets — done (" + bucketsDone + "/" + total + ")" : (isPolling ? "Syncing EF fare buckets (" + bucketsDone + "/" + total + ")..." : "EF fare buckets (" + bucketsDone + "/" + total + ")") },
         { done: seatsDone === total, label: seatsDone === total ? "EF seat maps — done (" + seatsDone + "/" + total + ")" : (isPolling ? "Syncing EF seat maps (" + seatsDone + "/" + total + ")..." : "EF seat maps (" + seatsDone + "/" + total + ")") }
       ];
-      if (!allDone && !isPolling && pollCount >= 24) {
-        steps.push({ done: true, label: "Background sync still running — click Refresh later if needed" });
+      if (!allDone && !isPolling && pollCount >= 60) {
+        steps.push({ done: true, label: "Timed out after 5m — click Refresh EF to retry" });
       }
-      renderSearchProgress(steps);
+      renderSearchProgress(steps, !allDone && isPolling);
       return allDone;
     }
 
     function startEfPolling(date, targetCabin) {
-      if (efPollTimer) {
-        clearInterval(efPollTimer);
-        efPollTimer = null;
-      }
+      stopEfTimers();
+      if (!searchStartedAt) searchStartedAt = Date.now();
       if (updateProgressFromCandidates(true, 0)) return;
+      efClockTimer = setInterval(function() {
+        const cel = document.getElementById("efElapsed");
+        if (cel && searchStartedAt) cel.textContent = fmtElapsed(Date.now() - searchStartedAt);
+      }, 1000);
       let pollCount = 0;
       efPollTimer = setInterval(async function() {
         pollCount++;
         const keys = latestCandidates.map(function(c) { return c.flightKey; }).filter(Boolean);
-        if (keys.length === 0 || pollCount > 24) {
-          clearInterval(efPollTimer);
-          efPollTimer = null;
+        if (keys.length === 0 || pollCount > 60) {
+          stopEfTimers();
           updateProgressFromCandidates(false, pollCount);
           return;
         }
@@ -622,6 +643,9 @@ export function renderHtml(): string {
             const upd = items[c.flightKey];
             if (!upd) return c;
             const next = Object.assign({}, c);
+            if (upd.canonicalKey && upd.canonicalKey !== c.flightKey) {
+              next.flightKey = upd.canonicalKey;
+            }
             if (upd.fareBuckets && !c.fareBuckets) {
               next.fareBuckets = upd.fareBuckets;
               changed = true;
@@ -641,8 +665,7 @@ export function renderHtml(): string {
             saveSearchState();
           }
           if (updateProgressFromCandidates(true, pollCount)) {
-            clearInterval(efPollTimer);
-            efPollTimer = null;
+            stopEfTimers();
           }
         } catch (e) {}
       }, 5000);
@@ -650,10 +673,8 @@ export function renderHtml(): string {
 
     async function runSearch(e) {
       if (e) e.preventDefault();
-      if (efPollTimer) {
-        clearInterval(efPollTimer);
-        efPollTimer = null;
-      }
+      stopEfTimers();
+      searchStartedAt = Date.now();
       const origins = document.getElementById("origins").value;
       const destinations = document.getElementById("destinations").value;
       const date = document.getElementById("date").value;
@@ -664,7 +685,11 @@ export function renderHtml(): string {
       renderSearchProgress([
         { done: false, label: "Querying flight schedule & weather..." },
         { done: false, label: "Querying FlightAware delays & links..." }
-      ]);
+      ], true);
+      efClockTimer = setInterval(function() {
+        const cel = document.getElementById("efElapsed");
+        if (cel && searchStartedAt) cel.textContent = fmtElapsed(Date.now() - searchStartedAt);
+      }, 1000);
       document.getElementById("resultsList").innerHTML = '<div class="card subtitle">Querying flights, seat maps, and live route status for ' + date + '...</div>';
 
       const qs = new URLSearchParams({ origins, destinations, date, airlines, targetCabin });
@@ -786,6 +811,10 @@ export function renderHtml(): string {
           ? '<div class="subtitle" style="margin-top:6px;"><strong>Predictive Signals:</strong> ' + dr.signals.join(' · ') + '</div>'
           : '';
 
+        const statusBadgesHtml = totCap > 0
+          ? '<div style="display:flex;align-items:center;"><span class="score-badge ' + badgeClass(c.readiness) + '" title="Standby Score: ' + c.standbyScore + '/100">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>'
+          : '<div style="display:flex;align-items:center;"><span class="pill" style="color:#94a3b8;border-color:rgba(148,163,184,0.3);background:rgba(148,163,184,0.12);">PENDING DATA</span></div>';
+
         return '<div class="flight-card">' +
           '<div class="flight-top">' +
             '<div class="flight-title">' +
@@ -794,7 +823,7 @@ export function renderHtml(): string {
               efTag +
             '</div>' +
             flightTotalsPill +
-            '<div style="display:flex;align-items:center;"><span class="score-badge ' + badgeClass(c.readiness) + '" title="Standby Score: ' + c.standbyScore + '/100">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>' +
+            statusBadgesHtml +
           '</div>' +
           '<div class="cabins-grid">' + cabins + '</div>' +
           economyComfortBar +
@@ -1559,6 +1588,7 @@ export function renderHtml(): string {
           const sd = JSON.parse(savedData);
           if (Array.isArray(sd.candidates) && sd.candidates.length > 0) {
             latestCandidates = sd.candidates;
+            searchStartedAt = sd.startedAt || Date.now();
             document.getElementById("resultsSection").style.display = "block";
             document.getElementById("resultsMeta").textContent = sd.metaText || (sd.candidates.length + " flight(s)");
             renderCandidates(sd.targetCabin || "economy");

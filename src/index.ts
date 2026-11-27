@@ -455,19 +455,22 @@ export default {
       const keys = keysParam.split(",").map((k) => k.trim()).filter(Boolean);
       if (keys.length === 0) return jsonResponse({ items: {} });
 
+      const normKey = (k: string) => k.replace(/^([A-Z0-9]{2})-\1(\d+-)/, "$1$2");
+      const lookupKeys = Array.from(new Set(keys.flatMap((k) => [k, normKey(k)])));
       const [efFlights, efSnapshots, seatmapMap] = await Promise.all([
         date ? listEfFlights(env.DB, date) : Promise.resolve([]),
         getLatestExpertFlyerSnapshots(env.DB),
-        getEfSeatmapsByKeys(env.DB, keys),
+        getEfSeatmapsByKeys(env.DB, lookupKeys),
       ]);
       const efFlightByKey = new Map(efFlights.map((f) => [f.flight_key, f]));
       const items: Record<string, any> = {};
 
       for (const fk of keys) {
-        const efFlight = efFlightByKey.get(fk);
-        const snap = efSnapshots.get(fk);
-        const smJson = seatmapMap.get(fk);
-        const parts = fk.split("-");
+        const nk = normKey(fk);
+        const efFlight = efFlightByKey.get(fk) || efFlightByKey.get(nk);
+        const snap = efSnapshots.get(fk) || efSnapshots.get(nk);
+        const smJson = seatmapMap.get(fk) || seatmapMap.get(nk);
+        const parts = nk.split("-");
         const airline = efFlight?.airline || parts[0]?.slice(0, 2) || "";
         const fareBuckets = efFlight?.ef_buckets ? parseFareBuckets(efFlight.ef_buckets, airline) : null;
         let cabins: Record<CabinKey, CabinSeatSummary> | null = null;
@@ -495,6 +498,7 @@ export default {
           });
         }
         items[fk] = {
+          canonicalKey: nk,
           hasEfBuckets: Boolean(fareBuckets),
           hasSeatmap,
           fareBuckets,
