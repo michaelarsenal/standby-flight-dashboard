@@ -425,7 +425,7 @@ export function renderHtml(): string {
       const airlines = document.getElementById("airlines").value;
       const targetCabin = document.getElementById("targetCabin").value;
 
-      document.getElementById("resultsList").innerHTML = '<div class="card subtitle">Querying flights, seat maps, and Day -1 / Day 0 route status...</div>';
+      document.getElementById("resultsList").innerHTML = '<div class="card subtitle">Querying flights, seat maps, and live route status for ' + date + '...</div>';
 
       const qs = new URLSearchParams({ origins, destinations, date, airlines, targetCabin });
       const res = await fetch("/api/search?" + qs.toString());

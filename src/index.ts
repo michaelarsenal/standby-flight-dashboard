@@ -450,32 +450,53 @@ export default {
 
     if (path === "/api/watches" && request.method === "GET") {
       if (!env.DB) return jsonResponse({ watches: [], ntfyTopic: env.NTFY_TOPIC || "" });
-      const [watches, savedTopic] = await Promise.all([
+      const [watches, savedTopic, efMap] = await Promise.all([
         listWatches(env.DB),
         getSetting(env.DB, "ntfy_topic"),
+        getLatestExpertFlyerSnapshots(env.DB),
       ]);
       const ntfyTopic = savedTopic || env.NTFY_TOPIC || "";
-      if (env.FLIGHTAWARE_API_KEY && watches.length > 0) {
-        const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-        const enriched = await Promise.all(
-          watches.map(async (w) => {
-            if (w.departure_date < cutoff) return w;
-            try {
-              const inbound = await fetchInboundDetails(
-                env.FLIGHTAWARE_API_KEY!,
-                w.flight_number,
-                w.departure_date,
-                w.departure_time,
-              );
-              return { ...w, inbound };
-            } catch {
-              return w;
+      const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const enriched = await Promise.all(
+        watches.map(async (w) => {
+          let nextWatch = w;
+          const snap = efMap.get(w.flight_key);
+          if (snap) {
+            const cabins = {
+              first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked),
+              business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked),
+              prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked),
+              economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked),
+            };
+            const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
+            const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
+            const rescored = computeStandbyScore({
+              cabins,
+              targetCabin: ((w.target_cabin || "economy") as CabinKey),
+              fareBuckets,
+              disruptions: [],
+              hoursToDeparture: hrs,
+            });
+            if (w.last_status !== rescored.readiness || w.last_score !== rescored.score) {
+              await updateWatchStatus(env.DB!, w.flight_key, rescored.readiness, rescored.score);
             }
-          }),
-        );
-        return jsonResponse({ watches: enriched, ntfyTopic });
-      }
-      return jsonResponse({ watches, ntfyTopic });
+            nextWatch = { ...w, last_status: rescored.readiness, last_score: rescored.score };
+          }
+          if (!env.FLIGHTAWARE_API_KEY || w.departure_date < cutoff) return nextWatch;
+          try {
+            const inbound = await fetchInboundDetails(
+              env.FLIGHTAWARE_API_KEY!,
+              w.flight_number,
+              w.departure_date,
+              w.departure_time,
+            );
+            return { ...nextWatch, inbound };
+          } catch {
+            return nextWatch;
+          }
+        }),
+      );
+      return jsonResponse({ watches: enriched, ntfyTopic });
     }
 
     if (path === "/api/watches" && request.method === "POST") {
