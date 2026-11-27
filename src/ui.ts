@@ -811,16 +811,14 @@ export function renderHtml(): string {
         if (sm && sm.sectionSeats) {
           var pills = sm.sectionSeats.map(function(s) {
             var isMe = s.seat === sm.seat;
-            var col = s.status === 'occupied' ? '#93c5fd' : (s.status === 'blocked' ? '#94a3b8' : '#86efac');
+            var col = isMe ? '#facc15' : (s.status === 'occupied' ? '#93c5fd' : (s.status === 'blocked' ? '#94a3b8' : '#86efac'));
             var bg = isMe ? 'rgba(250,204,21,0.18)' : 'rgba(15,23,42,0.55)';
             var brd = isMe ? 'rgba(250,204,21,0.75)' : 'rgba(148,163,184,0.25)';
-            var tag = s.status === 'occupied' ? 'occ' : (s.status === 'blocked' ? 'blk' : 'open');
+            var tag = isMe ? (s.status === 'occupied' ? 'you' : 'you*') : (s.status === 'occupied' ? 'occ' : (s.status === 'blocked' ? 'blk' : 'open'));
             return '<span style="font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid ' + brd + ';background:' + bg + ';color:' + col + ';margin-right:3px;">' + s.seat + ':' + tag + '</span>';
           }).join('');
           var warn = '';
-          if (sm.seatStatus !== 'occupied') {
-            warn = '<div style="font-size:10px;color:#f87171;margin-top:2px">⚠ ' + sm.seat + ' is ' + sm.seatStatus + ' (moved?)</div>';
-          } else if (sm.adjacentOccupied.length > 0) {
+          if (sm.adjacentOccupied.length > 0) {
             warn = '<div style="font-size:10px;color:#fbbf24;margin-top:2px">⚠ ' + sm.adjacentOccupied.join(', ') + ' occupied next to you</div>';
           } else if (sm.rowOccupied.length > 0) {
             warn = '<div style="font-size:10px;color:#cbd5e1;margin-top:2px">' + sm.rowOccupied.join(', ') + ' occ · adjacent spare</div>';
