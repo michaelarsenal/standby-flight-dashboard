@@ -1074,7 +1074,11 @@ export function renderHtml(): string {
         var lines = loads.map(function(c) {
           var pct = c.total > 0 ? Math.round((c.occupied / c.total) * 100) : 0;
           var col = pct >= 88 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#4ade80';
-          return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.45;white-space:nowrap;">' +
+          var boxStyle = c.preserved
+            ? 'border:1px dashed rgba(251,191,36,0.7);border-radius:4px;padding:1px 4px;margin:1px -4px;background:rgba(251,191,36,0.08);'
+            : '';
+          var tip = c.preserved ? ' title="Seat map closed for ' + c.code + ' — showing last best-known numbers"' : '';
+          return '<div' + tip + ' style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;line-height:1.45;white-space:nowrap;' + boxStyle + '">' +
             '<span style="color:#7dd3fc;font-weight:700;min-width:22px">' + c.bucket + '</span>' +
             '<strong style="color:' + col + '">' + c.total + '/' + c.open + '</strong>' +
           '</div>';

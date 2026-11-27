@@ -542,6 +542,8 @@ export default {
               { key: "prem_econ", code: "W", max: fareBuckets?.premEconMax },
               { key: "economy", code: "Y", max: fareBuckets?.economyMax },
             ];
+            const preservedMatch = String(snap.raw_note || "").match(/\(preserved ([A-Z,]+)\)/);
+            const preservedSet = new Set(preservedMatch ? preservedMatch[1].split(",") : []);
             const cabinLoads = cabinDefs
               .filter((d) => cabins[d.key].total > 0)
               .map((d) => ({
@@ -550,6 +552,7 @@ export default {
                 total: cabins[d.key].total,
                 open: cabins[d.key].available + cabins[d.key].blocked,
                 occupied: cabins[d.key].occupied,
+                preserved: preservedSet.has(d.code),
               }));
             const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
             const rescored = computeStandbyScore({

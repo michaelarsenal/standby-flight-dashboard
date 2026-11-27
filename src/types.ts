@@ -184,7 +184,7 @@ export interface WatchedFlight {
   seatMonitor?: SeatMonitorStatus | null;
   targetCabinSummary?: WatchLoadSummary | null;
   flightTotalSummary?: WatchLoadSummary | null;
-  cabinLoads?: Array<{ code: string; bucket: string; total: number; open: number; occupied: number }>;
+  cabinLoads?: Array<{ code: string; bucket: string; total: number; open: number; occupied: number; preserved?: boolean }>;
   economyComfort?: EconomySeatStats | null;
   lastSeatmapAt?: string | null;
 }
