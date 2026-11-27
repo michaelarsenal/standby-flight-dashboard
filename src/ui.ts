@@ -739,6 +739,32 @@ export function renderHtml(): string {
         var m = String(iso).match(/T([0-9]{2}:[0-9]{2})/);
         return m ? m[1] + 'Z' : String(iso);
       }
+      var AIRPORT_TZ = {
+        IAD: 'America/New_York', DCA: 'America/New_York', BWI: 'America/New_York',
+        JFK: 'America/New_York', EWR: 'America/New_York', BOS: 'America/New_York',
+        MIA: 'America/New_York', ATL: 'America/New_York', CLT: 'America/New_York',
+        ORD: 'America/Chicago', DFW: 'America/Chicago', IAH: 'America/Chicago',
+        DEN: 'America/Denver', LAX: 'America/Los_Angeles', SFO: 'America/Los_Angeles',
+        SEA: 'America/Los_Angeles', LHR: 'Europe/London', LGW: 'Europe/London',
+        MAN: 'Europe/London', EDI: 'Europe/London', DUB: 'Europe/Dublin'
+      };
+      function fmtLocalTime(iso, tz, airportCode) {
+        if (!iso) return '?';
+        var zone = tz || (airportCode ? AIRPORT_TZ[String(airportCode).toUpperCase()] : '') || '';
+        if (!zone) return fmtUtcTime(iso);
+        try {
+          var d = new Date(iso);
+          if (isNaN(d.getTime())) return fmtUtcTime(iso);
+          return new Intl.DateTimeFormat('en-GB', {
+            timeZone: zone,
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          }).format(d);
+        } catch (e) {
+          return fmtUtcTime(iso);
+        }
+      }
       function fmtMinsCountdown(mins) {
         if (mins === null || mins === undefined) return '';
         if (mins <= 0) return 'due now';
@@ -822,8 +848,8 @@ export function renderHtml(): string {
         var routeTxt = (inb.origin || '?') + ' → ' + (inb.destination || '?');
         var regTxt = inb.registration ? ' <span style="color:#94a3b8">(' + inb.registration + ')</span>' : '';
         var depTxt = inb.estimatedDeparture ? (inb.hasDeparted ? 'Dep ' : 'ETD ') + fmtUtcTime(inb.estimatedDeparture) + ' · ' : '';
-        var estTxt = fmtUtcTime(inb.estimatedArrival || inb.scheduledArrival);
-        var schedTxt = fmtUtcTime(inb.scheduledArrival);
+        var estTxt = fmtLocalTime(inb.estimatedArrival || inb.scheduledArrival, inb.destinationTimezone, inb.destination);
+        var schedTxt = fmtLocalTime(inb.scheduledArrival, inb.destinationTimezone, inb.destination);
         var delayTxt = inb.delayMins > 0 ? ' <span style="color:#f87171">(+' + inb.delayMins + 'm)</span>' : '';
         var sb = stageBadge(inb, estTxt);
         var sc = inb.surfaceCongestion;
@@ -934,7 +960,10 @@ export function renderHtml(): string {
         if (!out) return base;
         var bits = [];
         if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
-        if (out.delayMins >= 15) bits.push('<span style="color:#f87171;font-size:10px">+' + out.delayMins + 'm</span>');
+        if (out.delayMins >= 15) {
+          var estLocal = out.estimatedOut ? fmtLocalTime(out.estimatedOut, out.originTimezone, w.origin) : '';
+          bits.push('<span style="color:#f87171;font-size:10px" title="Published FlightAware outbound departure delay">' + (estLocal ? 'Est ' + estLocal + ' ' : '') + '(+' + out.delayMins + 'm)</span>');
+        }
         if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
         return base + (bits.length ? '<div style="margin-top:3px">' + bits.join(' ') + '</div>' : '');
       }

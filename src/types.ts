@@ -104,6 +104,7 @@ export interface OutboundFlightInfo {
   status: string;
   scheduledOut: string;
   estimatedOut: string;
+  originTimezone?: string;
   delayMins: number;
   cancelled: boolean;
   diverted: boolean;
@@ -114,6 +115,7 @@ export interface InboundFlightInfo {
   inboundIdent: string;
   origin: string;
   destination: string;
+  destinationTimezone?: string;
   registration: string;
   status: string;
   stage: InboundStage;
