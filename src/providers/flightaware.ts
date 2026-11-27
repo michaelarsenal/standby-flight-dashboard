@@ -455,7 +455,7 @@ export async function fetchArrivalCongestion(
     }
 
     const levelLabel = level === "heavy" ? "Heavy" : level === "moderate" ? "Moderate" : "Light";
-    const delayPart = avgDelayMins > 0 ? `+${avgDelayMins}m delay` : "on-time";
+    const delayPart = avgDelayMins > 0 ? `+${avgDelayMins}m airport delay` : "no airport delays";
     const summary = `${code} arrival: ${levelLabel} (${delayPart} · ${weatherSummary})`;
     return {
       airport: code,
