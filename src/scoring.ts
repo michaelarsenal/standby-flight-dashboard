@@ -2,6 +2,7 @@ import type {
   CabinKey,
   CabinSeatSummary,
   DisruptionRiskSummary,
+  EconomySeatStats,
   FareBuckets,
   ReadinessLevel,
   RouteDisruption,
@@ -213,4 +214,111 @@ function labelCabin(cabin: CabinKey): string {
     case "economy":
       return "Economy";
   }
+}
+
+interface SeatCell {
+  t?: string;
+  s?: string;
+}
+
+interface SeatRow {
+  seats?: SeatCell[];
+}
+
+interface SeatSection {
+  cabin?: string;
+  rows?: SeatRow[];
+}
+
+export function computeEconomySeatStats(
+  seatmapInput: string | { sections?: SeatSection[] } | null | undefined
+): EconomySeatStats | null {
+  if (!seatmapInput) return null;
+  let parsed: { sections?: SeatSection[] };
+  try {
+    parsed = typeof seatmapInput === "string" ? JSON.parse(seatmapInput) : seatmapInput;
+  } catch {
+    return null;
+  }
+  const econSections = (parsed.sections ?? []).filter((sec) => sec.cabin === "economy");
+  if (econSections.length === 0) return null;
+
+  const isOpen = (c: SeatCell) => c.s === "a" || c.s === "b";
+
+  let emptyLeft = 0;
+  let emptyMiddle = 0;
+  let emptyRight = 0;
+  let adjacentSpareSeats = 0;
+  let windowAvailable = 0;
+  let aisleAvailable = 0;
+
+  for (const sec of econSections) {
+    for (const row of sec.rows ?? []) {
+      const groups: SeatCell[][] = [];
+      let current: SeatCell[] = [];
+      for (const cell of row.seats ?? []) {
+        if (cell.t === "s") {
+          current.push(cell);
+        } else if (current.length > 0) {
+          groups.push(current);
+          current = [];
+        }
+      }
+      if (current.length > 0) groups.push(current);
+      if (groups.length === 0) continue;
+
+      // Empty row segments (Left / Middle / Right)
+      if (groups.length >= 3) {
+        if (groups[0].every(isOpen)) emptyLeft++;
+        for (let g = 1; g < groups.length - 1; g++) {
+          if (groups[g].every(isOpen)) emptyMiddle++;
+        }
+        if (groups[groups.length - 1].every(isOpen)) emptyRight++;
+      } else if (groups.length === 2) {
+        if (groups[0].every(isOpen)) emptyLeft++;
+        if (groups[1].every(isOpen)) emptyRight++;
+      } else {
+        if (groups[0].every(isOpen)) emptyMiddle++;
+      }
+
+      // Seats with an adjacent spare seat in the same section
+      for (const group of groups) {
+        for (let i = 0; i < group.length; i++) {
+          if (!isOpen(group[i])) continue;
+          const leftOpen = i > 0 && isOpen(group[i - 1]);
+          const rightOpen = i < group.length - 1 && isOpen(group[i + 1]);
+          if (leftOpen || rightOpen) adjacentSpareSeats++;
+        }
+      }
+
+      // Window seats (outermost left and outermost right)
+      const firstGroup = groups[0];
+      const lastGroup = groups[groups.length - 1];
+      if (isOpen(firstGroup[0])) windowAvailable++;
+      if (groups.length > 1 || firstGroup.length > 1) {
+        if (isOpen(lastGroup[lastGroup.length - 1])) windowAvailable++;
+      }
+
+      // Aisle seats (inner edges bordering an aisle)
+      if (groups.length >= 2) {
+        if (isOpen(firstGroup[firstGroup.length - 1])) aisleAvailable++;
+        for (let g = 1; g < groups.length - 1; g++) {
+          const mid = groups[g];
+          if (isOpen(mid[0])) aisleAvailable++;
+          if (mid.length > 1 && isOpen(mid[mid.length - 1])) aisleAvailable++;
+        }
+        if (isOpen(lastGroup[0])) aisleAvailable++;
+      }
+    }
+  }
+
+  return {
+    emptyLeft,
+    emptyMiddle,
+    emptyRight,
+    emptyRowsTotal: emptyLeft + emptyMiddle + emptyRight,
+    adjacentSpareSeats,
+    windowAvailable,
+    aisleAvailable,
+  };
 }

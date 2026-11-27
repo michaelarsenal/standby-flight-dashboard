@@ -55,6 +55,17 @@ export interface FlightCandidate {
   readiness: ReadinessLevel;
   reasons: string[];
   watched?: boolean;
+  economyComfort?: EconomySeatStats | null;
+}
+
+export interface EconomySeatStats {
+  emptyLeft: number;
+  emptyMiddle: number;
+  emptyRight: number;
+  emptyRowsTotal: number;
+  adjacentSpareSeats: number;
+  windowAvailable: number;
+  aisleAvailable: number;
 }
 
 export interface SearchQuery {

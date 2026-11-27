@@ -516,6 +516,15 @@ export function renderHtml(): string {
             '</div>'
           : '';
 
+        const ec = c.economyComfort;
+        const economyComfortBar = ec
+          ? '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:6px 10px;margin:0 0 10px;border-radius:8px;background:rgba(56,189,248,0.06);border:1px solid rgba(56,189,248,0.22);font-size:11.5px;color:#cbd5e1;">' +
+              '<span><strong style="color:#7dd3fc">Economy Comfort:</strong> Empty Rows <strong>L ' + ec.emptyLeft + ' · M ' + ec.emptyMiddle + ' · R ' + ec.emptyRight + '</strong> <span style="color:#94a3b8">(' + ec.emptyRowsTotal + ' total)</span></span>' +
+              '<span>Adjacent Spare: <strong>' + ec.adjacentSpareSeats + '</strong> seats</span>' +
+              '<span>Window: <strong>' + ec.windowAvailable + '</strong> · Aisle: <strong>' + ec.aisleAvailable + '</strong></span>' +
+            '</div>'
+          : '';
+
         const efTag = c.fareBuckets ? '<span class="pill">EF: ' + c.fareBuckets.raw.slice(0, 32) + (c.fareBuckets.raw.length > 32 ? '…' : '') + '</span>' : '';
         const dr = c.disruptionRisk;
         const riskClass = dr && dr.level === "high" ? "score-red" : dr && dr.level === "moderate" ? "score-amber" : "score-green";
@@ -535,6 +544,7 @@ export function renderHtml(): string {
           '</div>' +
           '<div class="cabins-grid">' + cabins + '</div>' +
           flightTotalsBar +
+          economyComfortBar +
           riskNotes +
           '<div class="actions-row">' +
             '<button class="btn-ghost" onclick="openSeatmap(\\'' + c.flightKey + '\\', \\'' + c.flightNumber + '\\')">Seat Map</button>' +
@@ -809,9 +819,18 @@ export function renderHtml(): string {
           });
           return acc;
         }, { a: 0, o: 0, b: 0, t: 0 });
+        const ec = (sec.cabin === "economy" && data.economyComfort) ? data.economyComfort : null;
+        const ecBanner = ec
+          ? '<div style="font-size:0.75rem;color:#7dd3fc;margin-bottom:8px;padding:5px 8px;border-radius:6px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.22);">' +
+              'Empty Rows: <strong>L ' + ec.emptyLeft + ' · M ' + ec.emptyMiddle + ' · R ' + ec.emptyRight + '</strong> (' + ec.emptyRowsTotal + ' total) · ' +
+              'Adjacent Spare: <strong>' + ec.adjacentSpareSeats + '</strong> · ' +
+              'Window: <strong>' + ec.windowAvailable + '</strong> · Aisle: <strong>' + ec.aisleAvailable + '</strong>' +
+            '</div>'
+          : '';
         return '<div class="sm-cabin">' +
           '<div class="sm-cabin-title"><span>' + (cabinNames[sec.cabin] || sec.code) + '</span>' +
-          '<span style="font-size:0.78rem;color:var(--muted)">' + counts.a + ' open · ' + counts.o + ' occ · ' + counts.b + ' blk (' + counts.t + ' total)</span></div>' +
+          '<span style="font-size:0.78rem;color:var(--muted)">' + (counts.a + counts.b) + ' open (' + counts.a + ' avail, ' + counts.b + ' blk) · ' + counts.o + ' occ (' + counts.t + ' total)</span></div>' +
+          ecBanner +
           '<div style="overflow-x:auto">' + rowsHtml + '</div>' +
         '</div>';
       }).join("");

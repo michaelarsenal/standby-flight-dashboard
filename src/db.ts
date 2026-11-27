@@ -375,3 +375,21 @@ export async function getEfSeatmap(
     .first<{ flight_key: string; aircraft: string | null; seatmap_json: string; captured_at: string }>();
   return res ?? null;
 }
+
+export async function getEfSeatmapsByKeys(
+  db: D1Database,
+  keys: string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (keys.length === 0) return map;
+  await ensureSchema(db);
+  const placeholders = keys.map(() => "?").join(", ");
+  const res = await db
+    .prepare(`SELECT flight_key, seatmap_json FROM ef_seatmaps WHERE flight_key IN (${placeholders})`)
+    .bind(...keys)
+    .all<{ flight_key: string; seatmap_json: string }>();
+  for (const row of res.results ?? []) {
+    map.set(row.flight_key, row.seatmap_json);
+  }
+  return map;
+}

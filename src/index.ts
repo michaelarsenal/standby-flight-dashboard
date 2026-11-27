@@ -3,6 +3,7 @@ import { sendNtfyPush, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts"
 import {
   deleteWatch,
   getEfSeatmap,
+  getEfSeatmapsByKeys,
   getLatestExpertFlyerSnapshots,
   getSetting,
   getSnapshots,
@@ -29,6 +30,7 @@ import {
 } from "./providers/flightaware.ts";
 import { fetchAirportWeatherRisk } from "./providers/weather.ts";
 import {
+  computeEconomySeatStats,
   computePredictiveDisruptionRisk,
   computeStandbyScore,
   parseFareBuckets,
@@ -217,6 +219,10 @@ async function runFlightSearch(params: {
       }
     }
 
+    const seatmapMap = env.DB
+      ? await getEfSeatmapsByKeys(env.DB, mergedClean.map((c) => c.flightKey))
+      : new Map<string, string>();
+
     const candidates: FlightCandidate[] = await Promise.all(
       mergedClean.map(async (c) => {
         const routeDisruptions = allDisruptions.filter(
@@ -254,6 +260,7 @@ async function runFlightSearch(params: {
 
         const efSnap = efSnapshots.get(c.flightKey);
         const cabins = applyExpertFlyerSnapshot(c, efSnap);
+        const economyComfort = computeEconomySeatStats(seatmapMap.get(c.flightKey));
         const { score, readiness, reasons } = computeStandbyScore({
           cabins,
           targetCabin,
@@ -271,6 +278,7 @@ async function runFlightSearch(params: {
           readiness,
           reasons: efSnap ? [`ExpertFlyer seat map (${efSnap.captured_at.slice(0, 16)}Z)`, ...reasons] : reasons,
           watched: watchedKeys.has(c.flightKey),
+          economyComfort,
         };
       })
     );
@@ -688,11 +696,13 @@ export default {
       const flightKey = decodeURIComponent(path.slice("/api/seatmap/".length));
       const row = await getEfSeatmap(env.DB, flightKey);
       if (!row) return jsonResponse({ error: "Seat map not cached yet for this flight" }, 404);
+      const parsedSeatmap = JSON.parse(row.seatmap_json);
       return jsonResponse({
         flightKey: row.flight_key,
         aircraft: row.aircraft,
         captured_at: row.captured_at,
-        seatmap: JSON.parse(row.seatmap_json),
+        seatmap: parsedSeatmap,
+        economyComfort: computeEconomySeatStats(parsedSeatmap),
       });
     }
 
