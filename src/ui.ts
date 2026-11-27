@@ -1263,9 +1263,36 @@ export function renderHtml(): string {
         xLabels += '<text x="' + xFor(i).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle" fill="#64748b" font-size="10">' + lbl + '</text>';
       }
 
+      var closeIdx = -1;
+      for (var ci = 0; ci < n; ci++) {
+        var note = String(snaps[ci].raw_note || '');
+        if (note.indexOf('(preserved ') !== -1) {
+          closeIdx = ci;
+          break;
+        }
+        if (ci > 0) {
+          var prevY = (snaps[ci - 1].economy_open || 0) + (snaps[ci - 1].economy_blocked || 0) + (snaps[ci - 1].economy_occupied || 0);
+          var curY = (snaps[ci].economy_open || 0) + (snaps[ci].economy_blocked || 0) + (snaps[ci].economy_occupied || 0);
+          if (prevY > 0 && curY === 0) {
+            closeIdx = ci;
+            break;
+          }
+        }
+      }
+
+      var closeMarker = '';
+      if (closeIdx >= 0) {
+        var cx = xFor(closeIdx);
+        var cTime = String(snaps[closeIdx].captured_at || '').slice(11, 16) + 'Z';
+        var anchor = cx > W - 130 ? 'end' : 'start';
+        var tx = anchor === 'end' ? cx - 4 : cx + 4;
+        closeMarker = '<line x1="' + cx.toFixed(1) + '" y1="' + padT + '" x2="' + cx.toFixed(1) + '" y2="' + (padT + plotH) + '" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,3"><title>Seatmap closed at ' + cTime + '</title></line>' +
+          '<text x="' + tx.toFixed(1) + '" y="' + (padT + 11) + '" text-anchor="' + anchor + '" fill="#fbbf24" font-size="10" font-weight="700">Seatmap closed (' + cTime + ')</text>';
+      }
+
       document.getElementById("graphBody").innerHTML =
         '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;background:rgba(2,6,23,0.45);border:1px solid var(--border);border-radius:8px;">' +
-        grid + paths + xLabels + '</svg>';
+        grid + closeMarker + paths + xLabels + '</svg>';
     }
 
     async function openGraph(flightKey, flightNum, depDate, depTime) {
