@@ -576,41 +576,41 @@ def main() -> int:
             except Exception as e:
                 print(f"[availability] warning: {e}", file=sys.stderr)
 
-            force_sync = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-            queries: list[dict[str, Any]] = []
-            queued_keys: set[str] = set()
-            for w in watches:
-                hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"), w.get("origin"))
-                due = False
-                reason = "invalid date"
-                if hrs is not None:
-                    if hrs < -1.0:
-                        due, reason = False, "departed"
-                    elif hrs > 336.0:
-                        due, reason = False, ">14d out"
-                    elif force_sync:
-                        due, reason = True, "manual Refresh EF"
+        force_sync = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+        queries: list[dict[str, Any]] = []
+        queued_keys: set[str] = set()
+        for w in watches:
+            hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"), w.get("origin"))
+            due = False
+            reason = "invalid date"
+            if hrs is not None:
+                if hrs < -1.0:
+                    due, reason = False, "departed"
+                elif hrs > 336.0:
+                    due, reason = False, ">14d out"
+                elif force_sync:
+                    due, reason = True, "manual Refresh EF"
+                else:
+                    age_mins = 9999.0
+                    try:
+                        hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
+                        snaps = hist.get("snapshots") or []
+                        ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+                        if ef_snaps:
+                            last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                            if not last_ts.endswith("Z") and "+" not in last_ts:
+                                last_ts += "+00:00"
+                            age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                    except Exception:
+                        pass
+                    if age_mins >= 9000.0:
+                        due, reason = True, "initial ExpertFlyer sync"
+                    elif hrs <= 2.0:
+                        due, reason = (age_mins >= 4.5), "T-2h high-freq window (5m)"
+                    elif hrs <= 24.0:
+                        due, reason = (age_mins >= 14.5), "T-24h check-in window (15m)"
                     else:
-                        age_mins = 9999.0
-                        try:
-                            hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
-                            snaps = hist.get("snapshots") or []
-                            ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
-                            if ef_snaps:
-                                last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
-                                if not last_ts.endswith("Z") and "+" not in last_ts:
-                                    last_ts += "+00:00"
-                                age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
-                        except Exception:
-                            pass
-                        if age_mins >= 9000.0:
-                            due, reason = True, "initial ExpertFlyer sync"
-                        elif hrs <= 2.0:
-                            due, reason = (age_mins >= 4.5), "T-2h high-freq window (5m)"
-                        elif hrs <= 24.0:
-                            due, reason = (age_mins >= 14.5), "T-24h check-in window (15m)"
-                        else:
-                            due, reason = (age_mins >= 180.0), "standard 3h cadence"
+                        due, reason = (age_mins >= 180.0), "standard 3h cadence"
             print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
             if not due:
                 continue
