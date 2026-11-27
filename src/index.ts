@@ -463,10 +463,10 @@ export default {
           const snap = efMap.get(w.flight_key);
           if (snap) {
             const cabins = {
-              first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked),
-              business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked),
-              prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked),
-              economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked),
+              first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
+              business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
+              prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
+              economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
             };
             const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
             const hrs = hoursUntilDeparture(w.departure_date, w.departure_time || "18:00");
