@@ -108,6 +108,9 @@ export interface OutboundFlightInfo {
   delayMins: number;
   cancelled: boolean;
   diverted: boolean;
+  adsbLive?: boolean;
+  flightRadarUrl?: string;
+  flightAwareUrl?: string;
 }
 
 export interface InboundFlightInfo {

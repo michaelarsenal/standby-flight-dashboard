@@ -160,9 +160,28 @@ export async function fetchWatchedFlightTelemetry(
     }
     if (!upcoming) upcoming = flights[0];
 
+    const outStatusLower = String(upcoming?.status || "").toLowerCase();
+    const outAdsbLive = Boolean(
+      upcoming &&
+        (upcoming.actual_out ||
+          upcoming.actual_off ||
+          outStatusLower.includes("taxi") ||
+          outStatusLower.includes("en route") ||
+          outStatusLower.includes("airborne") ||
+          outStatusLower.includes("landed") ||
+          outStatusLower.includes("arrived") ||
+          upcoming.diverted)
+    );
+    const outFlightNum = upcoming
+      ? String(upcoming.ident_iata || upcoming.ident || flightNumber).toUpperCase()
+      : flightNumber.toUpperCase();
+    const outIdent = upcoming
+      ? String(upcoming.ident_icao || upcoming.ident || outFlightNum).toUpperCase()
+      : flightNumber.toUpperCase();
+
     const outbound: OutboundFlightInfo | null = upcoming
       ? {
-          flightNumber: String(upcoming.ident_iata || upcoming.ident || flightNumber).toUpperCase(),
+          flightNumber: outFlightNum,
           gate: String(upcoming.gate_origin || ""),
           terminal: String(upcoming.terminal_origin || ""),
           status: String(upcoming.status || (upcoming.cancelled ? "Cancelled" : "Scheduled")),
@@ -172,6 +191,9 @@ export async function fetchWatchedFlightTelemetry(
           delayMins: typeof upcoming.departure_delay === "number" ? Math.round(upcoming.departure_delay / 60) : 0,
           cancelled: Boolean(upcoming.cancelled),
           diverted: Boolean(upcoming.diverted),
+          adsbLive: outAdsbLive,
+          flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(outFlightNum)}`,
+          flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(outIdent)}`,
         }
       : null;
 

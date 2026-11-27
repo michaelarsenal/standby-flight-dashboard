@@ -1094,15 +1094,29 @@ export function renderHtml(): string {
       function renderOutboundMeta(w) {
         var out = w.outbound;
         var base = w.departure_date + ' ' + (w.departure_time || '');
-        if (!out) return base;
         var bits = [];
-        if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
-        if (out.delayMins >= 15) {
-          var estLocal = out.estimatedOut ? fmtLocalTime(out.estimatedOut, out.originTimezone, w.origin) : '';
-          bits.push('<span style="color:#f87171;font-size:10px" title="Published FlightAware outbound departure delay">' + (estLocal ? 'Est ' + estLocal + ' ' : '') + '(+' + out.delayMins + 'm)</span>');
+        if (out) {
+          if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
+          if (out.delayMins >= 15) {
+            var estLocal = out.estimatedOut ? fmtLocalTime(out.estimatedOut, out.originTimezone, w.origin) : '';
+            bits.push('<span style="color:#f87171;font-size:10px" title="Published FlightAware outbound departure delay">' + (estLocal ? 'Est ' + estLocal + ' ' : '') + '(+' + out.delayMins + 'm)</span>');
+          }
+          if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
         }
-        if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
-        return base + (bits.length ? '<div style="margin-top:3px">' + bits.join(' ') + '</div>' : '');
+        var outFr24Live = out && out.adsbLive;
+        var outFr24Url = outFr24Live && out.flightRadarUrl
+          ? out.flightRadarUrl
+          : 'https://www.flightradar24.com/data/flights/' + encodeURIComponent(String(w.flight_number || '').toLowerCase());
+        var outFaUrl = (out && out.flightAwareUrl)
+          ? out.flightAwareUrl
+          : 'https://www.flightaware.com/live/flight/' + encodeURIComponent(String(w.flight_number || '').toUpperCase());
+        var outLinks = '<div style="margin-top:3px">' +
+          (outFr24Live
+            ? '<a href="' + outFr24Url + '" target="_blank" rel="noopener noreferrer" title="ADS-B live — open FlightRadar24 live tracker" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px"><span style="color:#4ade80">●</span> FR24 Live ↗</a>'
+            : '<a href="' + outFr24Url + '" target="_blank" rel="noopener noreferrer" title="ADS-B not yet live — opens FR24 flight schedule/history" style="font-size:11px;color:#64748b;text-decoration:none;margin-right:8px">○ FR24 (ADS-B offline) ↗</a>') +
+          '<a href="' + outFaUrl + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#38bdf8;text-decoration:none">FA ↗</a>' +
+        '</div>';
+        return base + (bits.length ? '<div style="margin-top:3px">' + bits.join(' ') + '</div>' : '') + outLinks;
       }
       function renderWatchRows(list) {
         var actBtnStyle = 'padding:4px 7px;font-size:11px;white-space:nowrap;';
