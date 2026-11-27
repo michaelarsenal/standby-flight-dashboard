@@ -179,7 +179,7 @@ def fetch_seatmaps(
         page.on("response", on_resp)
 
         page.goto(
-            "https://www.expertflyer.com/sign-in?redirect_url=%2Fdashboard",
+            "https://www.expertflyer.com/sign-in?redirect_url=%2Fair%2Fseat-map",
             wait_until="domcontentloaded",
             timeout=25000,
         )
@@ -187,7 +187,7 @@ def fetch_seatmaps(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_function("() => !location.pathname.includes('sign-in')", timeout=25000)
+        page.wait_for_url("**/air/seat-map**", wait_until="commit", timeout=25000)
         page.wait_for_timeout(2000)
 
         for q in queries:
@@ -325,7 +325,7 @@ def fetch_availability(
         page.on("response", on_resp)
 
         page.goto(
-            "https://www.expertflyer.com/sign-in?redirect_url=%2Fdashboard",
+            "https://www.expertflyer.com/sign-in?redirect_url=%2Fair%2Favailability",
             wait_until="domcontentloaded",
             timeout=25000,
         )
@@ -333,7 +333,7 @@ def fetch_availability(
         page.fill("#clerk-sign-in-email", email)
         page.fill("#clerk-sign-in-password", password)
         page.locator("button[type=submit]").first.click()
-        page.wait_for_function("() => !location.pathname.includes('sign-in')", timeout=25000)
+        page.wait_for_url("**/air/availability**", wait_until="commit", timeout=25000)
         page.wait_for_timeout(2000)
 
         for q in avail_queries:
@@ -357,6 +357,126 @@ def fetch_availability(
         browser.close()
 
     return all_flights
+
+
+def run_sync_session(
+    email: str,
+    password: str,
+    avail_queries: list[dict[str, str]],
+    build_seatmap_queries: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run availability and seat map queries in a single Clerk login session."""
+    all_flights: list[dict[str, Any]] = []
+    seatmap_results: list[dict[str, Any]] = []
+
+    with sync_playwright() as p:
+        browser = p.firefox.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+        )
+        page = ctx.new_page()
+        page.route(
+            "**/*",
+            lambda route: route.abort()
+            if (
+                route.request.resource_type in ("image", "media", "font", "stylesheet")
+                or any(
+                    x in route.request.url
+                    for x in [
+                        "cookielaw",
+                        "onetrust",
+                        "sentry",
+                        "googletagmanager",
+                        "clarity",
+                        "doubleclick",
+                        "hotjar",
+                        "intercom",
+                    ]
+                )
+            )
+            else route.continue_(),
+        )
+
+        captured: dict[str, str] = {"avail": "", "seat": ""}
+
+        def on_resp(r: Any) -> None:
+            if r.request.method != "POST":
+                return
+            try:
+                if "/air/availability/results" in r.url:
+                    txt = r.text()
+                    if len(txt) > len(captured["avail"]):
+                        captured["avail"] = txt
+                elif "/air/seat-map/results" in r.url:
+                    txt = r.text()
+                    if len(txt) > len(captured["seat"]):
+                        captured["seat"] = txt
+            except Exception:
+                pass
+
+        page.on("response", on_resp)
+
+        page.goto(
+            "https://www.expertflyer.com/sign-in?redirect_url=%2Fair%2Favailability",
+            wait_until="domcontentloaded",
+            timeout=25000,
+        )
+        page.wait_for_selector("#clerk-sign-in-email", timeout=15000)
+        page.fill("#clerk-sign-in-email", email)
+        page.fill("#clerk-sign-in-password", password)
+        page.locator("button[type=submit]").first.click()
+        page.wait_for_url("**/air/availability**", wait_until="commit", timeout=25000)
+        page.wait_for_timeout(2000)
+
+        for q in avail_queries:
+            captured["avail"] = ""
+            u = "https://www.expertflyer.com/air/availability/results?" + urllib.parse.urlencode(
+                {
+                    "origin": q["origin"],
+                    "destination": q["destination"],
+                    "departureDateTime": f"{q['departure_date']}T00:00",
+                    "alliance": "none",
+                    "airLineCodes": "",
+                    "excludeCodeshares": "true",
+                    "pcc": "USA (Default)",
+                    "resultsDisplay": "tabbed",
+                }
+            )
+            page.goto(u, wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(7000)
+            all_flights.extend(parse_availability_payload(captured["avail"], q["departure_date"]))
+
+        seat_queries = build_seatmap_queries(all_flights)
+        for q in seat_queries:
+            captured["seat"] = ""
+            target_url = (
+                "https://www.expertflyer.com/air/seat-map/results?"
+                + urllib.parse.urlencode(
+                    {
+                        "departingAirport": q["origin"],
+                        "arrivingAirport": q["destination"],
+                        "departDate": q["departure_date"],
+                        "airline": q["airline"],
+                        "flightNumber": q["flight_num"],
+                        "paxID": "passenger1",
+                        "ptc": "ADT",
+                        "withRawXML": "false",
+                        "cabinClass": "F,J,W,Y",
+                    }
+                )
+            )
+            try:
+                page.goto(target_url, wait_until="commit", timeout=35000)
+                page.wait_for_timeout(8000)
+                parsed = parse_seatmap_payload(captured["seat"])
+            except Exception as e:
+                print(f"[seatmap] {q['flightKey']} warning: {e}", file=sys.stderr)
+                parsed = None
+            seatmap_results.append({"query": q, "parsed": parsed})
+
+        browser.close()
+
+    return all_flights, seatmap_results
 
 
 def main() -> int:
@@ -423,116 +543,110 @@ def main() -> int:
             avail_pairs.add((str(w["origin"]).upper(), str(w["destination"]).upper(), str(w["departure_date"])))
 
     avail_queries = [{"origin": o, "destination": d, "departure_date": dt} for (o, d, dt) in sorted(avail_pairs)]
-    avail_flights: list[dict[str, Any]] = []
-    if avail_queries:
-        try:
-            avail_flights = fetch_availability(email, password, avail_queries[:6])
-            if avail_flights:
+
+    def build_seatmap_queries(avail_flights: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if avail_flights:
+            try:
                 resp = http_json(f"{args.worker_url.rstrip('/')}/api/expertflyer/flights", {"flights": avail_flights})
                 print(f"[availability] synced {len(avail_flights)} direct flights -> {resp}")
-        except Exception as e:
-            print(f"[availability] warning: {e}", file=sys.stderr)
+            except Exception as e:
+                print(f"[availability] warning: {e}", file=sys.stderr)
 
-    queries = []
-    queued_keys: set[str] = set()
-    for w in watches:
-        hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"))
-        due = False
-        reason = "invalid date"
-        if hrs is not None:
-            if hrs < -1.0:
-                due, reason = False, "departed"
-            elif hrs > 336.0:
-                due, reason = False, ">14d out"
-            else:
-                age_mins = 9999.0
-                try:
-                    hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
-                    snaps = hist.get("snapshots") or []
-                    ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
-                    if ef_snaps:
-                        last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
-                        if not last_ts.endswith("Z") and "+" not in last_ts:
-                            last_ts += "+00:00"
-                        age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
-                except Exception:
-                    pass
-                if age_mins >= 9000.0:
-                    due, reason = True, "initial ExpertFlyer sync"
-                elif 0.9 <= hrs <= 1.6:
-                    due, reason = True, "pre-close window"
-                elif hrs < 0.9:
-                    due, reason = (age_mins >= 25.0), "post-close check"
-                elif hrs <= 24.0:
-                    due, reason = (age_mins >= 25.0), "T-24h check-in window"
+        queries: list[dict[str, Any]] = []
+        queued_keys: set[str] = set()
+        for w in watches:
+            hrs = hours_until_departure(w.get("departure_date", ""), w.get("departure_time"))
+            due = False
+            reason = "invalid date"
+            if hrs is not None:
+                if hrs < -1.0:
+                    due, reason = False, "departed"
+                elif hrs > 336.0:
+                    due, reason = False, ">14d out"
                 else:
-                    due, reason = (age_mins >= 180.0), "standard 3h cadence"
-        print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
-        if not due:
-            continue
-        fnum = str(w.get("flight_number") or "")
-        airline = str(w.get("airline") or "").upper()
-        digits = re.sub(r"^[A-Z]+", "", fnum.upper())
-        queued_keys.add(w["flight_key"])
-        queries.append(
-            {
-                "flightKey": w["flight_key"],
-                "airline": airline,
-                "flightNumber": fnum,
-                "flight_num": digits,
-                "origin": str(w["origin"]).upper(),
-                "destination": str(w["destination"]).upper(),
-                "departure_date": str(w["departure_date"]),
-                "departure_time": str(w.get("departure_time") or "18:00"),
-                "ef_buckets": str(w.get("ef_buckets") or ""),
-                "reason": reason,
-            }
-        )
+                    age_mins = 9999.0
+                    try:
+                        hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(w['flight_key'], safe='')}")
+                        snaps = hist.get("snapshots") or []
+                        ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+                        if ef_snaps:
+                            last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                            if not last_ts.endswith("Z") and "+" not in last_ts:
+                                last_ts += "+00:00"
+                            age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                    except Exception:
+                        pass
+                    if age_mins >= 9000.0:
+                        due, reason = True, "initial ExpertFlyer sync"
+                    elif 0.9 <= hrs <= 1.6:
+                        due, reason = True, "pre-close window"
+                    elif hrs < 0.9:
+                        due, reason = (age_mins >= 25.0), "post-close check"
+                    elif hrs <= 24.0:
+                        due, reason = (age_mins >= 25.0), "T-24h check-in window"
+                    else:
+                        due, reason = (age_mins >= 180.0), "standard 3h cadence"
+            print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
+            if not due:
+                continue
+            fnum = str(w.get("flight_number") or "")
+            airline = str(w.get("airline") or "").upper()
+            digits = re.sub(r"^[A-Z]+", "", fnum.upper())
+            queued_keys.add(w["flight_key"])
+            queries.append(
+                {
+                    "flightKey": w["flight_key"],
+                    "airline": airline,
+                    "flightNumber": fnum,
+                    "flight_num": digits,
+                    "origin": str(w["origin"]).upper(),
+                    "destination": str(w["destination"]).upper(),
+                    "departure_date": str(w["departure_date"]),
+                    "departure_time": str(w.get("departure_time") or "18:00"),
+                    "ef_buckets": str(w.get("ef_buckets") or ""),
+                    "reason": reason,
+                }
+            )
 
-    # Pre-cache seat maps for all direct route flights (WAS <-> LHR) so searches show loads instantly
-    for af in avail_flights:
-        fk = af["flight_key"]
-        if fk in queued_keys:
-            continue
-        hrs = hours_until_departure(af["departure_date"], af.get("departure_time"))
-        if hrs is None or hrs < 0.8 or hrs > 48.0:
-            continue
-        # Refresh route cache if no snapshot in last 30 mins
-        try:
-            hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(fk, safe='')}")
-            snaps = hist.get("snapshots") or []
-            ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
-            if ef_snaps:
-                last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
-                if not last_ts.endswith("Z") and "+" not in last_ts:
-                    last_ts += "+00:00"
-                age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
-                if age_mins < 30.0:
-                    continue
-        except Exception:
-            pass
-        queued_keys.add(fk)
-        digits = re.sub(r"^[A-Z0-9]{2}", "", af["flight_number"].upper())
-        queries.append(
-            {
-                "flightKey": fk,
-                "airline": af["airline"],
-                "flightNumber": af["flight_number"],
-                "flight_num": digits,
-                "origin": af["origin"],
-                "destination": af["destination"],
-                "departure_date": af["departure_date"],
-                "departure_time": af.get("departure_time") or "18:00",
-                "ef_buckets": af.get("ef_buckets") or "",
-                "reason": "route pre-cache",
-            }
-        )
+        for af in avail_flights:
+            fk = af["flight_key"]
+            if fk in queued_keys:
+                continue
+            hrs = hours_until_departure(af["departure_date"], af.get("departure_time"))
+            if hrs is None or hrs < 0.8 or hrs > 48.0:
+                continue
+            try:
+                hist = http_json(f"{args.worker_url.rstrip('/')}/api/history/{urllib.parse.quote(fk, safe='')}")
+                snaps = hist.get("snapshots") or []
+                ef_snaps = [s for s in snaps if str(s.get("raw_note") or "").startswith("ExpertFlyer")]
+                if ef_snaps:
+                    last_ts = str(ef_snaps[-1].get("captured_at") or "").replace(" ", "T")
+                    if not last_ts.endswith("Z") and "+" not in last_ts:
+                        last_ts += "+00:00"
+                    age_mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last_ts)).total_seconds() / 60.0
+                    if age_mins < 30.0:
+                        continue
+            except Exception:
+                pass
+            queued_keys.add(fk)
+            digits = re.sub(r"^[A-Z0-9]{2}", "", af["flight_number"].upper())
+            queries.append(
+                {
+                    "flightKey": fk,
+                    "airline": af["airline"],
+                    "flightNumber": af["flight_number"],
+                    "flight_num": digits,
+                    "origin": af["origin"],
+                    "destination": af["destination"],
+                    "departure_date": af["departure_date"],
+                    "departure_time": af.get("departure_time") or "18:00",
+                    "ef_buckets": af.get("ef_buckets") or "",
+                    "reason": "route pre-cache",
+                }
+            )
+        return queries[:18]
 
-    if not queries:
-        print("No flights due for ExpertFlyer sync.")
-        return 0
-
-    fetched = fetch_seatmaps(email, password, queries[:18])
+    _, fetched = run_sync_session(email, password, avail_queries[:6], build_seatmap_queries)
     for item in fetched:
         q = item["query"]
         parsed = item["parsed"]
