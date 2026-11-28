@@ -915,13 +915,17 @@ export function renderHtml(): string {
 
     async function toggleWatch(idx) {
       const c = latestCandidates[idx];
+      if (!c) return;
+      const fk = c.flightKey;
       const targetCabin = document.getElementById("targetCabin").value;
       const efInput = document.getElementById("ef-" + idx);
       const efBuckets = efInput ? efInput.value : null;
 
       if (c.watched) {
-        await fetch("/api/watches/" + encodeURIComponent(c.flightKey), { method: "DELETE" });
+        await fetch("/api/watches/" + encodeURIComponent(fk), { method: "DELETE" });
         c.watched = false;
+        const live = latestCandidates.find(function(x) { return x.flightKey === fk; });
+        if (live) live.watched = false;
       } else {
         const res = await fetch("/api/watches", {
           method: "POST",
@@ -930,21 +934,24 @@ export function renderHtml(): string {
             candidate: c,
             targetCabin,
             efBuckets,
-            seatmapAlreadyRequested: pendingSeatmapKeys.has(c.flightKey)
+            seatmapAlreadyRequested: pendingSeatmapKeys.has(fk)
           })
         });
         const data = await res.json().catch(function() { return {}; });
         c.watched = true;
+        const live = latestCandidates.find(function(x) { return x.flightKey === fk; });
+        if (live) live.watched = true;
         if (data.seatmapTriggered) {
-          pendingSeatmapKeys.add(c.flightKey);
+          pendingSeatmapKeys.add(fk);
           searchStartedAt = Date.now();
           startEfPolling(c.departureDate || document.getElementById("date").value, targetCabin);
         }
-        if (data.seatmapTriggered || data.seatmapAlreadyRequested || pendingSeatmapKeys.has(c.flightKey)) {
-          startWatchSeatmapPolling(c.flightKey);
+        if (data.seatmapTriggered || data.seatmapAlreadyRequested || pendingSeatmapKeys.has(fk)) {
+          startWatchSeatmapPolling(fk);
         }
       }
       renderCandidates(targetCabin);
+      saveSearchState();
       loadWatches();
     }
 
@@ -1107,6 +1114,19 @@ export function renderHtml(): string {
       }
       const watches = data.watches || [];
       latestWatches = watches;
+      const watchedKeys = new Set(watches.map(function(w) { return w.flight_key; }));
+      let watchSyncChanged = false;
+      for (let ci = 0; ci < latestCandidates.length; ci++) {
+        const isW = watchedKeys.has(latestCandidates[ci].flightKey);
+        if (Boolean(latestCandidates[ci].watched) !== isW) {
+          latestCandidates[ci].watched = isW;
+          watchSyncChanged = true;
+        }
+      }
+      if (watchSyncChanged && latestCandidates.length > 0) {
+        renderCandidates(document.getElementById("targetCabin").value);
+        saveSearchState();
+      }
       for (var wi = 0; wi < watches.length; wi++) {
         var ww = watches[wi];
         if (ww && (ww.lastSeatmapAt || (ww.cabinLoads && ww.cabinLoads.length > 0))) {
