@@ -71,6 +71,26 @@ function cabinFromSnapshot(
   };
 }
 
+function reclassifyFirstToBusinessIfNoFirst(
+  cabins: Record<CabinKey, CabinSeatSummary>,
+  fareBuckets?: { firstMax: number | null; businessMax: number | null } | null
+): Record<CabinKey, CabinSeatSummary> {
+  if (
+    fareBuckets &&
+    fareBuckets.firstMax === null &&
+    fareBuckets.businessMax !== null &&
+    cabins.first.total > 0 &&
+    cabins.business.total === 0
+  ) {
+    return {
+      ...cabins,
+      business: { ...cabins.first },
+      first: { available: 0, occupied: 0, blocked: 0, total: 0 },
+    };
+  }
+  return cabins;
+}
+
 function applyExpertFlyerSnapshot(
   c: { cabins: Record<CabinKey, CabinSeatSummary>; fareBuckets?: { firstMax: number | null; businessMax: number | null } | null },
   snap: SeatSnapshot | undefined
@@ -82,17 +102,7 @@ function applyExpertFlyerSnapshot(
     prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, c.cabins.prem_econ.total),
     economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, c.cabins.economy.total),
   };
-  if (
-    c.fareBuckets &&
-    c.fareBuckets.firstMax === null &&
-    c.fareBuckets.businessMax !== null &&
-    cabins.first.total > 0 &&
-    cabins.business.total === 0
-  ) {
-    cabins.business = { ...cabins.first };
-    cabins.first = { available: 0, occupied: 0, blocked: 0, total: 0 };
-  }
-  return cabins;
+  return reclassifyFirstToBusinessIfNoFirst(cabins, c.fareBuckets);
 }
 
 function hoursUntilDeparture(date: string, time: string): number | null {
@@ -643,12 +653,15 @@ export default {
         const fareBuckets = efFlight?.ef_buckets ? parseFareBuckets(efFlight.ef_buckets, airline) : null;
         let cabins: Record<CabinKey, CabinSeatSummary> | null = null;
         if (snap) {
-          cabins = {
-            first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
-            business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
-            prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
-            economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
-          };
+          cabins = reclassifyFirstToBusinessIfNoFirst(
+            {
+              first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
+              business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
+              prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
+              economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
+            },
+            fareBuckets
+          );
         }
         const economyComfort = computeEconomySeatStats(smJson);
         const hasSeatmap = Boolean(cabins && (cabins.economy.total > 0 || cabins.business.total > 0));
@@ -1332,7 +1345,30 @@ export default {
       const flightKey = decodeURIComponent(path.slice("/api/seatmap/".length));
       const row = await getEfSeatmap(env.DB, flightKey);
       if (!row) return jsonResponse({ error: "Seat map not cached yet for this flight" }, 404);
-      const parsedSeatmap = JSON.parse(row.seatmap_json);
+      const parsedSeatmap = JSON.parse(row.seatmap_json) as {
+        sections?: Array<{ cabin?: string; code?: string; rows?: unknown[] }>;
+        [key: string]: unknown;
+      };
+      const dateMatch = flightKey.match(/(\d{4}-\d{2}-\d{2})$/);
+      if (dateMatch && Array.isArray(parsedSeatmap.sections)) {
+        const hasFirst = parsedSeatmap.sections.some((s) => s.cabin === "first");
+        const hasBiz = parsedSeatmap.sections.some((s) => s.cabin === "business");
+        if (hasFirst && !hasBiz) {
+          const efFlights = await listEfFlights(env.DB, dateMatch[1]);
+          const normKey = flightKey.replace(/^([A-Z0-9]{2})-\1(\d+-)/, "$1$2");
+          const efFlight = efFlights.find((f) => f.flight_key === flightKey || f.flight_key === normKey);
+          const airline = efFlight?.airline || normKey.slice(0, 2);
+          const fb = efFlight?.ef_buckets ? parseFareBuckets(efFlight.ef_buckets, airline) : null;
+          if (fb && fb.firstMax === null && fb.businessMax !== null) {
+            for (const sec of parsedSeatmap.sections) {
+              if (sec.cabin === "first") {
+                sec.cabin = "business";
+                if (sec.code === "F") sec.code = "J";
+              }
+            }
+          }
+        }
+      }
       return jsonResponse({
         flightKey: row.flight_key,
         aircraft: row.aircraft,
