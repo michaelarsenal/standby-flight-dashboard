@@ -855,12 +855,16 @@ export default {
           const smJson = seatmapMap.get(w.flight_key);
           const economyComfort = smJson ? computeEconomySeatStats(smJson) : null;
           if (snap) {
-            const cabins = {
-              first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
-              business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
-              prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
-              economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
-            };
+            const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
+            const cabins = reclassifyFirstToBusinessIfNoFirst(
+              {
+                first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
+                business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
+                prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
+                economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
+              },
+              fareBuckets
+            );
             const targetKey = ((w.target_cabin || "economy") as CabinKey);
             const tc = cabins[targetKey];
             const targetCabinSummary = tc && tc.total > 0
@@ -879,7 +883,6 @@ export default {
                   { total: 0, open: 0, occupied: 0, available: 0, blocked: 0 }
                 )
               : null;
-            const fareBuckets = parseFareBuckets(w.ef_buckets, w.airline);
             const cabinDefs: Array<{ key: CabinKey; code: string; max: number | null | undefined }> = [
               { key: "first", code: "F", max: fareBuckets?.firstMax },
               { key: "business", code: "J", max: fareBuckets?.businessMax },

@@ -695,7 +695,7 @@ export function renderHtml(): string {
               next.fareBuckets = upd.fareBuckets;
               changed = true;
             }
-            if (upd.hasSeatmap && upd.cabins && c.cabins.economy.total === 0 && c.cabins.business.total === 0) {
+            if (upd.hasSeatmap && upd.cabins && (pendingSeatmapKeys.has(c.flightKey) || (upd.canonicalKey && pendingSeatmapKeys.has(upd.canonicalKey)) || (c.cabins.economy.total === 0 && c.cabins.business.total === 0))) {
               next.cabins = upd.cabins;
               next.economyComfort = upd.economyComfort;
               if (upd.standbyScore !== null) next.standbyScore = upd.standbyScore;
@@ -939,9 +939,28 @@ export function renderHtml(): string {
           searchStartedAt = Date.now();
           startEfPolling(c.departureDate || document.getElementById("date").value, targetCabin);
         }
+        if (data.seatmapTriggered || data.seatmapAlreadyRequested || pendingSeatmapKeys.has(c.flightKey)) {
+          startWatchSeatmapPolling(c.flightKey);
+        }
       }
       renderCandidates(targetCabin);
       loadWatches();
+    }
+
+    const pendingWatchKeys = new Set();
+    let watchPollTimer = null;
+    function startWatchSeatmapPolling(flightKey) {
+      if (flightKey) pendingWatchKeys.add(flightKey);
+      if (watchPollTimer) return;
+      let ticks = 0;
+      watchPollTimer = setInterval(async function() {
+        ticks += 1;
+        await loadWatches();
+        if (pendingWatchKeys.size === 0 || ticks >= 25) {
+          clearInterval(watchPollTimer);
+          watchPollTimer = null;
+        }
+      }, 6000);
     }
 
     async function addManualWatch() {
@@ -965,6 +984,9 @@ export function renderHtml(): string {
         return;
       }
       document.getElementById("mwFlight").value = "";
+      if (data.flightKey && data.seatmapTriggered) {
+        startWatchSeatmapPolling(data.flightKey);
+      }
       loadWatches();
     }
 
@@ -1084,6 +1106,12 @@ export function renderHtml(): string {
       }
       const watches = data.watches || [];
       latestWatches = watches;
+      for (var wi = 0; wi < watches.length; wi++) {
+        var ww = watches[wi];
+        if (ww && (ww.lastSeatmapAt || (ww.cabinLoads && ww.cabinLoads.length > 0))) {
+          pendingWatchKeys.delete(ww.flight_key);
+        }
+      }
       if (watches.length === 0) {
         box.innerHTML = '<span class="subtitle">No flights watched yet. Click <strong>+ Watch Flight</strong> on any search result to track T-24h seat-fill velocity and receive alerts.</span>';
         return;
