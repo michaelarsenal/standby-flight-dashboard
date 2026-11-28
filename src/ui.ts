@@ -710,6 +710,7 @@ export function renderHtml(): string {
           if (changed) {
             renderCandidates(targetCabin);
             saveSearchState();
+            loadWatches();
           }
           if (updateProgressFromCandidates(true, pollCount)) {
             stopEfTimers();
@@ -924,7 +925,12 @@ export function renderHtml(): string {
         const res = await fetch("/api/watches", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ candidate: c, targetCabin, efBuckets })
+          body: JSON.stringify({
+            candidate: c,
+            targetCabin,
+            efBuckets,
+            seatmapAlreadyRequested: pendingSeatmapKeys.has(c.flightKey)
+          })
         });
         const data = await res.json().catch(function() { return {}; });
         c.watched = true;

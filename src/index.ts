@@ -949,14 +949,25 @@ export default {
         candidate: FlightCandidate;
         targetCabin?: CabinKey;
         efBuckets?: string | null;
+        seatmapAlreadyRequested?: boolean;
       };
       await upsertWatch(env.DB, body.candidate, body.targetCabin || "economy", body.efBuckets);
       const hrs = hoursUntilDeparture(body.candidate.departureDate, body.candidate.departureTime);
       await recordSnapshot(env.DB, body.candidate, hrs, "Initial watch");
-      const hasSeatData = body.candidate.cabins && (body.candidate.cabins.economy.total > 0 || body.candidate.cabins.business.total > 0);
-      if (!hasSeatData && env.GITHUB_TOKEN) {
+      const flightKey = body.candidate.flightKey;
+      const cdKey = `seatmap_dispatch:${flightKey}`;
+      const [existingSeatmap, lastRaw] = await Promise.all([
+        getEfSeatmap(env.DB, flightKey),
+        getSetting(env.DB, cdKey),
+      ]);
+      const lastMs = lastRaw ? Number(lastRaw) : 0;
+      const recentlyRequested = Boolean(body.seatmapAlreadyRequested) || (lastMs > 0 && Date.now() - lastMs <= 300_000);
+      const shouldTrigger = !existingSeatmap && !recentlyRequested && Boolean(env.GITHUB_TOKEN);
+      let seatmapTriggered = false;
+      if (shouldTrigger) {
+        await setSetting(env.DB, cdKey, String(Date.now()));
         try {
-          await fetch(
+          const ghRes = await fetch(
             "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
             {
               method: "POST",
@@ -967,13 +978,19 @@ export default {
               },
               body: JSON.stringify({
                 ref: "main",
-                inputs: { mode: "seatmap_only", flight_key: body.candidate.flightKey },
+                inputs: { mode: "seatmap_only", flight_key: flightKey },
               }),
             }
           );
+          seatmapTriggered = ghRes.ok;
         } catch {}
       }
-      return jsonResponse({ ok: true, seatmapTriggered: !hasSeatData && Boolean(env.GITHUB_TOKEN) });
+      return jsonResponse({
+        ok: true,
+        seatmapTriggered,
+        seatmapAlreadyCached: Boolean(existingSeatmap),
+        seatmapAlreadyRequested: recentlyRequested,
+      });
     }
 
     if (path === "/api/watches/manual" && request.method === "POST") {
@@ -1018,9 +1035,18 @@ export default {
         watched: true,
       };
       await upsertWatch(env.DB, candidate, body.targetCabin || "economy", null);
-      if (env.GITHUB_TOKEN) {
+      const cdKey = `seatmap_dispatch:${flightKey}`;
+      const [existingSeatmap, lastRaw] = await Promise.all([
+        getEfSeatmap(env.DB, flightKey),
+        getSetting(env.DB, cdKey),
+      ]);
+      const lastMs = lastRaw ? Number(lastRaw) : 0;
+      const recentlyRequested = lastMs > 0 && Date.now() - lastMs <= 300_000;
+      let seatmapTriggered = false;
+      if (!existingSeatmap && !recentlyRequested && env.GITHUB_TOKEN) {
+        await setSetting(env.DB, cdKey, String(Date.now()));
         try {
-          await fetch(
+          const ghRes = await fetch(
             "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
             {
               method: "POST",
@@ -1035,9 +1061,10 @@ export default {
               }),
             }
           );
+          seatmapTriggered = ghRes.ok;
         } catch {}
       }
-      return jsonResponse({ ok: true, flightKey });
+      return jsonResponse({ ok: true, flightKey, seatmapTriggered });
     }
 
     if (path.startsWith("/api/watches/") && request.method === "DELETE") {
