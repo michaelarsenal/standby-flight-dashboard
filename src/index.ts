@@ -1175,22 +1175,28 @@ export default {
         try {
           const prevSm = JSON.parse(prevSeatmapRow.seatmap_json) as { sections?: Array<{ cabin?: string; rows?: unknown[] }> };
           const prevSections = prevSm.sections || [];
-          const curByCabin = new Map<string, any>();
+          const curByCabin = new Map<string, any[]>();
           for (const sec of mergedSeatmap.sections as Array<{ cabin?: string; rows?: unknown[] }>) {
             if (sec?.cabin && (sec.rows?.length || 0) > 0) {
-              curByCabin.set(sec.cabin, sec);
+              const arr = curByCabin.get(sec.cabin) || [];
+              arr.push(sec);
+              curByCabin.set(sec.cabin, arr);
             }
           }
-          const prevByCabin = new Map<string, any>();
+          const prevByCabin = new Map<string, any[]>();
           for (const sec of prevSections) {
             if (sec?.cabin && (sec.rows?.length || 0) > 0) {
-              prevByCabin.set(sec.cabin, sec);
+              const arr = prevByCabin.get(sec.cabin) || [];
+              arr.push(sec);
+              prevByCabin.set(sec.cabin, arr);
             }
           }
           const orderedSections: any[] = [];
           for (const cKey of ["first", "business", "prem_econ", "economy"]) {
-            if (curByCabin.has(cKey)) orderedSections.push(curByCabin.get(cKey));
-            else if (prevByCabin.has(cKey)) orderedSections.push(prevByCabin.get(cKey));
+            const curSecs = curByCabin.get(cKey);
+            const prevSecs = prevByCabin.get(cKey);
+            if (curSecs && curSecs.length > 0) orderedSections.push(...curSecs);
+            else if (prevSecs && prevSecs.length > 0) orderedSections.push(...prevSecs);
           }
           if (orderedSections.length > 0) {
             mergedSeatmap = { ...mergedSeatmap, sections: orderedSections };

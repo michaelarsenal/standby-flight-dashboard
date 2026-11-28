@@ -139,8 +139,9 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
             for s in row.get("seats") or []:
                 stype = str(s.get("type") or "")
                 st = str(s.get("status") or "").lower()
-                has_seat_status = st in ("available", "occupied", "blocked")
-                if stype == "seat" or has_seat_status:
+                slabel = str(s.get("label") or "").strip()
+                has_seat_status = st in ("available", "occupied", "blocked") and bool(slabel)
+                if (stype == "seat" and bool(slabel)) or has_seat_status:
                     cabins[key]["total"] += 1
                     if st == "available":
                         cabins[key]["available"] += 1
@@ -150,7 +151,7 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
                         cabins[key]["blocked"] += 1
                     c_seats.append({
                         "t": "s",
-                        "l": str(s.get("label") or ""),
+                        "l": slabel,
                         "s": "a" if st == "available" else ("o" if st == "occupied" else ("b" if st == "blocked" else "?")),
                         "p": 1 if (s.get("isChargeable") or s.get("isPaidPremium")) else 0,
                     })
