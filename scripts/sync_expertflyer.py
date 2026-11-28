@@ -506,6 +506,10 @@ def run_sync_session(
                 pass
 
         if not session_valid:
+            try:
+                ctx.clear_cookies()
+            except Exception:
+                pass
             if not sign_in("/air/availability"):
                 print("[auth] sign-in failed after 2 attempts; aborting session cleanly")
                 browser.close()
