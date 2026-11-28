@@ -403,11 +403,15 @@ def run_sync_session(
     all_flights: list[dict[str, Any]] = []
     seatmap_results: list[dict[str, Any]] = []
 
+    session_file = os.environ.get("EF_SESSION_FILE", "").strip()
     with sync_playwright() as p:
         browser = p.firefox.launch(headless=True)
-        ctx = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
-        )
+        ctx_kwargs: dict[str, Any] = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+        }
+        if session_file and os.path.exists(session_file):
+            ctx_kwargs["storage_state"] = session_file
+        ctx = browser.new_context(**ctx_kwargs)
         page = ctx.new_page()
         page.route(
             "**/*",
@@ -452,6 +456,15 @@ def run_sync_session(
 
         page.on("response", on_resp)
 
+        def save_session() -> None:
+            if not session_file:
+                return
+            try:
+                os.makedirs(os.path.dirname(session_file), exist_ok=True)
+                ctx.storage_state(path=session_file)
+            except Exception as e:
+                print(f"[auth] warning saving session: {e}", file=sys.stderr)
+
         def sign_in(redirect_path: str = "/air/availability") -> bool:
             for attempt in (1, 2):
                 page.goto(
@@ -471,6 +484,7 @@ def run_sync_session(
                 page.wait_for_timeout(2000)
                 print(f"[auth] attempt={attempt} post-login url={page.url}")
                 if "/sign-in" not in page.url:
+                    save_session()
                     return True
                 try:
                     err_txt = page.locator("[role='alert'], .cl-formFieldErrorText").first.inner_text(timeout=1000)
@@ -480,10 +494,22 @@ def run_sync_session(
                     pass
             return False
 
-        if not sign_in("/air/availability"):
-            print("[auth] sign-in failed after 2 attempts; aborting session cleanly")
-            browser.close()
-            return all_flights, seatmap_results
+        session_valid = False
+        if session_file and os.path.exists(session_file):
+            try:
+                page.goto("https://www.expertflyer.com/air/availability", wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(1500)
+                if "/sign-in" not in page.url:
+                    session_valid = True
+                    print(f"[auth] reused cached session url={page.url}")
+            except Exception:
+                pass
+
+        if not session_valid:
+            if not sign_in("/air/availability"):
+                print("[auth] sign-in failed after 2 attempts; aborting session cleanly")
+                browser.close()
+                return all_flights, seatmap_results
 
         for q in avail_queries:
             captured["avail"] = ""
@@ -507,15 +533,8 @@ def run_sync_session(
                         break
                     page.wait_for_timeout(500)
                 if "/sign-in" in page.url:
-                    print(f"[availability] {q['origin']}-{q['destination']} {q['departure_date']} redirected to sign-in; re-authenticating")
-                    if sign_in("/air/availability"):
-                        captured["avail"] = ""
-                        captured["avail_status"] = 0
-                        page.goto(u, wait_until="domcontentloaded", timeout=25000)
-                        for _ in range(24):
-                            if '"searchResults"' in captured["avail"]:
-                                break
-                            page.wait_for_timeout(500)
+                    print(f"[availability] {q['origin']}-{q['destination']} {q['departure_date']} session expired (redirected to sign-in); stopping")
+                    break
                 parsed_avail = parse_availability_payload(captured["avail"], q["departure_date"])
                 if not parsed_avail:
                     print(
@@ -555,9 +574,8 @@ def run_sync_session(
                             break
                         page.wait_for_timeout(500)
                     if "/sign-in" in page.url:
-                        print(f"[seatmap] {q['flightKey']} redirected to sign-in; re-authenticating")
-                        if sign_in("/air/seat-map"):
-                            continue
+                        print(f"[seatmap] {q['flightKey']} session expired (redirected to sign-in); stopping")
+                        break
                     # Give a brief moment for any trailing chunks if seatMap just appeared
                     if '"seatMap"' in captured["seat"]:
                         page.wait_for_timeout(500)
@@ -574,6 +592,7 @@ def run_sync_session(
                     page.wait_for_timeout(2000)
             seatmap_results.append({"query": q, "parsed": parsed})
 
+        save_session()
         browser.close()
 
     return all_flights, seatmap_results

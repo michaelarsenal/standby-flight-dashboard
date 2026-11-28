@@ -48,6 +48,14 @@ jobs:
           pip install playwright
           playwright install firefox
 
+      - name: Restore ExpertFlyer session cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ef-session
+          key: ef-session-${{ github.run_id }}
+          restore-keys: |
+            ef-session-
+
       - name: Sync watched flights from ExpertFlyer
         env:
           EXPERTFLYER_EMAIL: ${{ secrets.EXPERTFLYER_EMAIL }}
@@ -58,4 +66,5 @@ jobs:
           EF_DATE: ${{ github.event.inputs.date }}
           EF_MODE: ${{ github.event.inputs.mode }}
           EF_FLIGHT_KEY: ${{ github.event.inputs.flight_key }}
+          EF_SESSION_FILE: /tmp/ef-session/state.json
         run: python3 scripts/sync_expertflyer.py
