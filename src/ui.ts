@@ -536,6 +536,7 @@ export function renderHtml(): string {
     function badgeClass(level) {
       if (level === "green") return "score-green";
       if (level === "red") return "score-red";
+      if (!level || level === "pending") return "score-slate";
       return "score-amber";
     }
 

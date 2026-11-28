@@ -954,15 +954,23 @@ export default {
         efBuckets?: string | null;
         seatmapAlreadyRequested?: boolean;
       };
-      await upsertWatch(env.DB, body.candidate, body.targetCabin || "economy", body.efBuckets);
-      const hrs = hoursUntilDeparture(body.candidate.departureDate, body.candidate.departureTime);
-      await recordSnapshot(env.DB, body.candidate, hrs, "Initial watch");
       const flightKey = body.candidate.flightKey;
       const cdKey = `seatmap_dispatch:${flightKey}`;
       const [existingSeatmap, lastRaw] = await Promise.all([
         getEfSeatmap(env.DB, flightKey),
         getSetting(env.DB, cdKey),
       ]);
+      const hasSeatData = Boolean(
+        body.candidate.cabins &&
+        (body.candidate.cabins.economy.total > 0 || body.candidate.cabins.business.total > 0)
+      );
+      const watchCandidate =
+        existingSeatmap || hasSeatData
+          ? body.candidate
+          : { ...body.candidate, readiness: "pending" as any };
+      await upsertWatch(env.DB, watchCandidate, body.targetCabin || "economy", body.efBuckets);
+      const hrs = hoursUntilDeparture(body.candidate.departureDate, body.candidate.departureTime);
+      await recordSnapshot(env.DB, watchCandidate, hrs, "Initial watch");
       const lastMs = lastRaw ? Number(lastRaw) : 0;
       const recentlyRequested = Boolean(body.seatmapAlreadyRequested) || (lastMs > 0 && Date.now() - lastMs <= 300_000);
       const shouldTrigger = !existingSeatmap && !recentlyRequested && Boolean(env.GITHUB_TOKEN);
@@ -1033,7 +1041,7 @@ export default {
         fareBuckets: null,
         disruptions: [],
         standbyScore: 50,
-        readiness: "amber",
+        readiness: "pending" as any,
         reasons: ["Manual ExpertFlyer watch (awaiting sync)"],
         watched: true,
       };
@@ -1248,11 +1256,12 @@ export default {
       }
 
       if (w) {
-        if (w.last_status && w.last_status !== rescored.readiness) {
+        const hadRealBaseline = Boolean(prevSnap) && Boolean(w.last_status) && w.last_status !== "pending";
+        if (hadRealBaseline && w.last_status !== rescored.readiness) {
           await sendStandbyAlert(
             env,
             candidate,
-            w.last_status,
+            w.last_status!,
             rescored.reasons.join("; ")
           );
         }
@@ -1653,7 +1662,7 @@ export default {
 
       await recordSnapshot(env.DB, updated, hrs);
 
-      if (w.last_status && w.last_status !== updated.readiness) {
+      if (w.last_status && w.last_status !== "pending" && w.last_status !== updated.readiness) {
         await sendStandbyAlert(
           env,
           updated,
