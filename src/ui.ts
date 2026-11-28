@@ -320,7 +320,7 @@ export function renderHtml(): string {
     <header>
       <div>
         <h1>Standby Flight Dashboard</h1>
-        <div class="subtitle">British Airways &amp; Virgin Atlantic — Seat Map Velocity &amp; Route Disruption Monitor</div>
+        <div class="subtitle">British Airways, Virgin Atlantic &amp; American Airlines — Seat Map Velocity &amp; Route Disruption Monitor</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <button type="button" class="btn-ghost" onclick="openFaq()" style="padding:5px 12px;font-size:12px;">FAQ</button>
@@ -342,13 +342,20 @@ export function renderHtml(): string {
           <label for="date">Departure Date</label>
           <input id="date" type="date" required />
         </div>
-        <div>
-          <label for="airlines">Airlines</label>
-          <select id="airlines">
-            <option value="BA,VS">BA + Virgin Atlantic</option>
-            <option value="BA">British Airways (BA)</option>
-            <option value="VS">Virgin Atlantic (VS)</option>
-          </select>
+        <div style="position:relative;" id="airlinesWrap">
+          <label for="airlinesBtn">Airlines</label>
+          <input type="hidden" id="airlines" value="BA,VS" />
+          <button type="button" id="airlinesBtn" onclick="toggleAirlinesMenu(event)" style="width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:13.5px;cursor:pointer;">
+            <span id="airlinesBtnLabel">BA, VS</span>
+            <span style="color:var(--muted);font-size:11px;">▾</span>
+          </button>
+          <div id="airlinesMenu" style="display:none;position:absolute;top:100%;left:0;right:0;min-width:240px;margin-top:4px;background:#0f172a;border:1px solid rgba(148,163,184,0.35);border-radius:10px;padding:8px;z-index:60;box-shadow:0 10px 28px rgba(0,0,0,0.55);">
+            <div id="airlinesOptions"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid rgba(148,163,184,0.18);font-size:11px;">
+              <button type="button" class="btn-ghost" style="padding:2px 8px;font-size:11px;" onclick="selectAllAirlines()">Select All</button>
+              <button type="button" class="btn-ghost" style="padding:2px 8px;font-size:11px;" onclick="closeAirlinesMenu()">Done</button>
+            </div>
+          </div>
         </div>
         <div>
           <label for="targetCabin">Target Cabin</label>
@@ -1643,6 +1650,85 @@ export function renderHtml(): string {
       } catch {}
     }
 
+    const AIRLINE_OPTIONS = [
+      { code: "BA", name: "British Airways" },
+      { code: "VS", name: "Virgin Atlantic" },
+      { code: "AA", name: "American Airlines" }
+    ];
+
+    function getSelectedAirlines() {
+      const raw = document.getElementById("airlines").value || "BA,VS";
+      const list = raw.split(",").map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+      return list.length > 0 ? list : ["BA", "VS"];
+    }
+
+    function setSelectedAirlines(rawOrList) {
+      const list = Array.isArray(rawOrList)
+        ? rawOrList
+        : String(rawOrList || "BA,VS").split(",").map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+      const valid = list.length > 0 ? list : ["BA", "VS"];
+      document.getElementById("airlines").value = valid.join(",");
+      const lbl = document.getElementById("airlinesBtnLabel");
+      if (lbl) {
+        if (valid.length === AIRLINE_OPTIONS.length) lbl.textContent = valid.join(", ") + " (All)";
+        else if (valid.length === 1) lbl.textContent = valid[0] + " only";
+        else lbl.textContent = valid.join(", ");
+      }
+      renderAirlinesMenu();
+    }
+
+    function renderAirlinesMenu() {
+      const box = document.getElementById("airlinesOptions");
+      if (!box) return;
+      const sel = new Set(getSelectedAirlines());
+      box.innerHTML = AIRLINE_OPTIONS.map(function(opt) {
+        const checked = sel.has(opt.code) ? "checked" : "";
+        return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 4px;border-radius:6px;">' +
+          '<label style="display:flex;align-items:center;gap:7px;margin:0;text-transform:none;letter-spacing:0;font-size:12.5px;color:#e2e8f0;cursor:pointer;flex:1;">' +
+            '<input type="checkbox" ' + checked + ' onchange="toggleAirlineCode(\\'' + opt.code + '\\', this.checked)" style="width:auto;margin:0;cursor:pointer;" />' +
+            '<span><strong>' + opt.code + '</strong> · ' + opt.name + '</span>' +
+          '</label>' +
+          '<button type="button" class="btn-ghost" onclick="selectOnlyAirline(\\'' + opt.code + '\\', event)" style="padding:1px 7px;font-size:10.5px;color:#7dd3fc;">only</button>' +
+        '</div>';
+      }).join("");
+    }
+
+    function toggleAirlineCode(code, isChecked) {
+      const cur = new Set(getSelectedAirlines());
+      if (isChecked) cur.add(code);
+      else if (cur.size > 1) cur.delete(code);
+      setSelectedAirlines(Array.from(cur));
+    }
+
+    function selectOnlyAirline(code, e) {
+      if (e) e.stopPropagation();
+      setSelectedAirlines([code]);
+      closeAirlinesMenu();
+    }
+
+    function selectAllAirlines() {
+      setSelectedAirlines(AIRLINE_OPTIONS.map(function(o) { return o.code; }));
+    }
+
+    function toggleAirlinesMenu(e) {
+      if (e) e.stopPropagation();
+      const menu = document.getElementById("airlinesMenu");
+      if (!menu) return;
+      const open = menu.style.display === "block";
+      menu.style.display = open ? "none" : "block";
+      if (!open) renderAirlinesMenu();
+    }
+
+    function closeAirlinesMenu() {
+      const menu = document.getElementById("airlinesMenu");
+      if (menu) menu.style.display = "none";
+    }
+
+    document.addEventListener("click", function(e) {
+      const wrap = document.getElementById("airlinesWrap");
+      if (wrap && !wrap.contains(e.target)) closeAirlinesMenu();
+    });
+
     function restoreSearchState() {
       try {
         const savedInputs = localStorage.getItem("standby_last_search_inputs");
@@ -1651,9 +1737,10 @@ export function renderHtml(): string {
           if (inp.origins) document.getElementById("origins").value = inp.origins;
           if (inp.destinations) document.getElementById("destinations").value = inp.destinations;
           if (inp.date) document.getElementById("date").value = inp.date;
-          if (inp.airlines) document.getElementById("airlines").value = inp.airlines;
+          if (inp.airlines) setSelectedAirlines(inp.airlines);
           if (inp.targetCabin) document.getElementById("targetCabin").value = inp.targetCabin;
         }
+        renderAirlinesMenu();
         const savedData = localStorage.getItem("standby_last_search_data");
         if (savedData) {
           const sd = JSON.parse(savedData);
