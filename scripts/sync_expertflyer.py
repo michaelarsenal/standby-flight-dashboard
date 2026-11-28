@@ -80,12 +80,16 @@ def is_watch_due(watch: dict[str, Any]) -> tuple[bool, float | None, str]:
         except ValueError:
             pass
 
-    # T-2h window (and pre-close): poll every 5m without exceeding safe rate
+    # Tiered cadence based on time to departure
     if -5.0 <= hrs <= 2.0:
         return (age_mins >= 4.5), hrs, "T-2h high-freq window (5m)"
     if hrs <= 24.0:
         return (age_mins >= 14.5), hrs, "T-24h check-in window (15m)"
-    return (age_mins >= 180.0), hrs, "standard 3h cadence"
+    if hrs <= 48.0:
+        return (age_mins >= 119.0), hrs, "T-48h pre-check-in window (2h)"
+    if hrs <= 72.0:
+        return (age_mins >= 359.0), hrs, "T-72h medium cadence (6h)"
+    return (age_mins >= 719.0), hrs, "long-range cadence (12h)"
 
 
 def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
@@ -757,8 +761,12 @@ def main() -> int:
                         due, reason = (age_mins >= 4.5), "T-2h high-freq window (5m)"
                     elif hrs <= 24.0:
                         due, reason = (age_mins >= 14.5), "T-24h check-in window (15m)"
+                    elif hrs <= 48.0:
+                        due, reason = (age_mins >= 119.0), "T-48h pre-check-in window (2h)"
+                    elif hrs <= 72.0:
+                        due, reason = (age_mins >= 359.0), "T-72h medium cadence (6h)"
                     else:
-                        due, reason = (age_mins >= 180.0), "standard 3h cadence"
+                        due, reason = (age_mins >= 719.0), "long-range cadence (12h)"
             print(f"[watch] {w['flight_key']} hrs={hrs if hrs is None else round(hrs, 2)} due={due} ({reason})")
             if not due:
                 continue

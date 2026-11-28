@@ -482,10 +482,12 @@ export function renderHtml(): string {
         <div>
           <strong style="color:#7dd3fc">2. ExpertFlyer (EF) Refresh Intervals</strong>
           <ul style="margin:4px 0 0;padding-left:18px;color:#94a3b8">
-            <li>Triggered via GitHub Actions (<code>expertflyer-sync.yml</code>) every <strong>5 minutes</strong>; skips login if no watched flight is due.</li>
-            <li><strong>Inside T-2h</strong> (2h before to 5h after scheduled departure): every <strong>5 minutes</strong>.</li>
-            <li><strong>T-24h to T-2h:</strong> every <strong>15 minutes</strong>. <strong>T-14d to T-24h:</strong> every <strong>3 hours</strong>.</li>
-            <li><em>Note:</em> GitHub Actions <code>schedule</code> triggers can be delayed or coalesced up to ~60 minutes during peak GitHub queue times. If EF locks a seat map at check-in close, the dashboard preserves the last-known-good snapshot.</li>
+            <li>Triggered via GitHub Actions (<code>expertflyer-sync.yml</code>) every <strong>5 minutes</strong> (reusing cached session cookies); suspends automatically once a seat map closes out.</li>
+            <li><strong>Inside T-2h</strong> (to closeout): every <strong>5 minutes</strong>.</li>
+            <li><strong>T-24h to T-2h:</strong> every <strong>15 minutes</strong>.</li>
+            <li><strong>T-48h to T-24h:</strong> every <strong>2 hours</strong>.</li>
+            <li><strong>T-72h to T-48h:</strong> every <strong>6 hours</strong>. <strong>T-14d to T-72h:</strong> every <strong>12 hours</strong>.</li>
+            <li><em>Note:</em> GitHub Actions <code>schedule</code> triggers can be delayed or coalesced during peak GitHub queue times. If EF closes a cabin or seat map at check-in close, the dashboard preserves the last best-known numbers (marked with a dashed amber border).</li>
           </ul>
         </div>
         <div>
