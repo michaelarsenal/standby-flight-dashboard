@@ -1346,8 +1346,8 @@ export default {
       const row = await getEfSeatmap(env.DB, flightKey);
       if (!row) return jsonResponse({ error: "Seat map not cached yet for this flight" }, 404);
       const parsedSeatmap = JSON.parse(row.seatmap_json) as {
-        sections?: Array<{ cabin?: string; code?: string; rows?: unknown[] }>;
-        [key: string]: unknown;
+        sections?: Array<{ cabin?: string; code?: string; rows?: any[] }>;
+        [key: string]: any;
       };
       const dateMatch = flightKey.match(/(\d{4}-\d{2}-\d{2})$/);
       if (dateMatch && Array.isArray(parsedSeatmap.sections)) {
