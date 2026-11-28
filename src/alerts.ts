@@ -7,7 +7,7 @@ export async function generateGeminiBriefingWithDebug(
 ): Promise<{ text: string | null; error: string | null }> {
   const apiKey = (env.GEMINI_API_KEY || "").trim();
   if (!apiKey) return { text: null, error: "GEMINI_API_KEY not set" };
-  for (const model of ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]) {
+  for (const model of ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]) {
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -17,7 +17,7 @@ export async function generateGeminiBriefingWithDebug(
             "Content-Type": "application/json",
             "x-goog-api-key": apiKey,
           },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(8000),
           body: JSON.stringify({
             contents: [
               {
@@ -36,7 +36,7 @@ export async function generateGeminiBriefingWithDebug(
           }),
         }
       );
-      if (res.status === 404) continue;
+      if (res.status === 404 || res.status === 429 || res.status >= 500) continue;
       if (!res.ok) {
         const errTxt = await res.text().catch(() => "");
         return { text: null, error: `HTTP ${res.status} (${model}): ${errTxt.slice(0, 160)}` };
