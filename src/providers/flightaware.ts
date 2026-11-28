@@ -158,44 +158,41 @@ export async function fetchWatchedFlightTelemetry(
         upcoming = flights.find((f) => String(f.scheduled_out || "").startsWith(departureDate)) || null;
       }
     }
-    if (!upcoming) upcoming = flights[0];
+    if (!upcoming && !departureDate) upcoming = flights[0];
+    if (!upcoming) return { inbound: null, outbound: null };
 
-    const outStatusLower = String(upcoming?.status || "").toLowerCase();
+    const outStatusLower = String(upcoming.status || "").toLowerCase();
     const outAdsbLive = Boolean(
-      upcoming &&
-        (upcoming.actual_out ||
-          upcoming.actual_off ||
-          outStatusLower.includes("taxi") ||
-          outStatusLower.includes("en route") ||
-          outStatusLower.includes("airborne") ||
-          outStatusLower.includes("landed") ||
-          outStatusLower.includes("arrived") ||
-          upcoming.diverted)
+      upcoming.actual_out ||
+        upcoming.actual_off ||
+        outStatusLower.includes("taxi") ||
+        outStatusLower.includes("en route") ||
+        outStatusLower.includes("airborne") ||
+        outStatusLower.includes("landed") ||
+        outStatusLower.includes("arrived") ||
+        upcoming.diverted
     );
-    const outFlightNum = upcoming
-      ? String(upcoming.ident_iata || upcoming.ident || flightNumber).toUpperCase()
-      : flightNumber.toUpperCase();
-    const outIdent = upcoming
-      ? String(upcoming.ident_icao || upcoming.ident || outFlightNum).toUpperCase()
-      : flightNumber.toUpperCase();
+    const outFlightNum = String(upcoming.ident_iata || upcoming.ident || flightNumber).toUpperCase();
+    const outIdent = String(upcoming.ident_icao || upcoming.ident || outFlightNum).toUpperCase();
+    const outFaId = upcoming.fa_flight_id ? String(upcoming.fa_flight_id) : "";
 
-    const outbound: OutboundFlightInfo | null = upcoming
-      ? {
-          flightNumber: outFlightNum,
-          gate: String(upcoming.gate_origin || ""),
-          terminal: String(upcoming.terminal_origin || ""),
-          status: String(upcoming.status || (upcoming.cancelled ? "Cancelled" : "Scheduled")),
-          scheduledOut: String(upcoming.scheduled_out || ""),
-          estimatedOut: String(upcoming.actual_out || upcoming.estimated_out || upcoming.scheduled_out || ""),
-          originTimezone: String(upcoming.origin?.timezone || ""),
-          delayMins: typeof upcoming.departure_delay === "number" ? Math.round(upcoming.departure_delay / 60) : 0,
-          cancelled: Boolean(upcoming.cancelled),
-          diverted: Boolean(upcoming.diverted),
-          adsbLive: outAdsbLive,
-          flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(outFlightNum)}`,
-          flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(outIdent)}`,
-        }
-      : null;
+    const outbound: OutboundFlightInfo = {
+      flightNumber: outFlightNum,
+      gate: String(upcoming.gate_origin || ""),
+      terminal: String(upcoming.terminal_origin || ""),
+      status: String(upcoming.status || (upcoming.cancelled ? "Cancelled" : "Scheduled")),
+      scheduledOut: String(upcoming.scheduled_out || ""),
+      estimatedOut: String(upcoming.actual_out || upcoming.estimated_out || upcoming.scheduled_out || ""),
+      originTimezone: String(upcoming.origin?.timezone || ""),
+      delayMins: typeof upcoming.departure_delay === "number" ? Math.round(upcoming.departure_delay / 60) : 0,
+      cancelled: Boolean(upcoming.cancelled),
+      diverted: Boolean(upcoming.diverted),
+      adsbLive: outAdsbLive,
+      flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(outFlightNum)}`,
+      flightAwareUrl: outFaId
+        ? `https://www.flightaware.com/live/flight/id/${encodeURIComponent(outFaId)}`
+        : `https://www.flightaware.com/live/flight/${encodeURIComponent(outIdent)}`,
+    };
 
     let inbound: any = null;
     if (upcoming?.inbound_fa_flight_id) {
@@ -358,7 +355,9 @@ export async function fetchWatchedFlightTelemetry(
         outboundImpact,
         impactSummary,
         flightRadarUrl: `https://www.flightradar24.com/${encodeURIComponent(inboundFlight)}`,
-        flightAwareUrl: `https://www.flightaware.com/live/flight/${encodeURIComponent(inboundIdent)}`,
+        flightAwareUrl: inbound.fa_flight_id
+          ? `https://www.flightaware.com/live/flight/id/${encodeURIComponent(String(inbound.fa_flight_id))}`
+          : `https://www.flightaware.com/live/flight/${encodeURIComponent(inboundIdent)}`,
       },
     };
   } catch {

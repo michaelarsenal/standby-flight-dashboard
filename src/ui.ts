@@ -1320,22 +1320,21 @@ export function renderHtml(): string {
       function renderOutboundMeta(w) {
         var out = w.outbound;
         var base = w.departure_date + ' ' + (w.departure_time || '');
-        var bits = [];
-        if (out) {
-          if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
-          if (out.delayMins >= 15) {
-            var estLocal = out.estimatedOut ? fmtLocalTime(out.estimatedOut, out.originTimezone, w.origin) : '';
-            bits.push('<span style="color:#f87171;font-size:10px" title="Published FlightAware outbound departure delay">' + (estLocal ? 'Est ' + estLocal + ' ' : '') + '(+' + out.delayMins + 'm)</span>');
-          }
-          if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
+        if (!out) {
+          return base + '<div style="margin-top:3px;font-size:10.5px;color:#64748b">Live FR24/FA tracking inside T-48h</div>';
         }
-        var outFr24Live = out && out.adsbLive;
+        var bits = [];
+        if (out.gate) bits.push('<span class="pill" style="padding:1px 5px;font-size:10px;color:#7dd3fc">Gate ' + out.gate + '</span>');
+        if (out.delayMins >= 15) {
+          var estLocal = out.estimatedOut ? fmtLocalTime(out.estimatedOut, out.originTimezone, w.origin) : '';
+          bits.push('<span style="color:#f87171;font-size:10px" title="Published FlightAware outbound departure delay">' + (estLocal ? 'Est ' + estLocal + ' ' : '') + '(+' + out.delayMins + 'm)</span>');
+        }
+        if (out.cancelled) bits.push('<span style="color:#f87171;font-size:10px;font-weight:700">CANCELLED</span>');
+        var outFr24Live = out.adsbLive;
         var outFr24Url = outFr24Live && out.flightRadarUrl
           ? out.flightRadarUrl
           : 'https://www.flightradar24.com/data/flights/' + encodeURIComponent(String(w.flight_number || '').toLowerCase());
-        var outFaUrl = (out && out.flightAwareUrl)
-          ? out.flightAwareUrl
-          : 'https://www.flightaware.com/live/flight/' + encodeURIComponent(String(w.flight_number || '').toUpperCase());
+        var outFaUrl = out.flightAwareUrl || ('https://www.flightaware.com/live/flight/' + encodeURIComponent(String(w.flight_number || '').toUpperCase()));
         var outLinks = '<div style="margin-top:3px">' +
           (outFr24Live
             ? '<a href="' + outFr24Url + '" target="_blank" rel="noopener noreferrer" title="ADS-B live — open FlightRadar24 live tracker" style="font-size:11px;color:#38bdf8;text-decoration:none;margin-right:8px"><span style="color:#4ade80">●</span> FR24 Live ↗</a>'
