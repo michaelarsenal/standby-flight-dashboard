@@ -18,6 +18,14 @@ on:
         description: "Optional YYYY-MM-DD departure date"
         required: false
         default: ""
+      mode:
+        description: "Optional mode: avail_only or seatmap_only"
+        required: false
+        default: ""
+      flight_key:
+        description: "Optional single flight_key for seatmap_only mode"
+        required: false
+        default: ""
 
 jobs:
   sync:
@@ -44,4 +52,6 @@ jobs:
           EF_ORIGINS: ${{ github.event.inputs.origins }}
           EF_DESTINATIONS: ${{ github.event.inputs.destinations }}
           EF_DATE: ${{ github.event.inputs.date }}
+          EF_MODE: ${{ github.event.inputs.mode }}
+          EF_FLIGHT_KEY: ${{ github.event.inputs.flight_key }}
         run: python3 scripts/sync_expertflyer.py

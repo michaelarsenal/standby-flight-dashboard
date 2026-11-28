@@ -625,18 +625,22 @@ def main() -> int:
     ef_origins = [x.strip().upper() for x in os.environ.get("EF_ORIGINS", "").split(",") if x.strip()]
     ef_dests = [x.strip().upper() for x in os.environ.get("EF_DESTINATIONS", "").split(",") if x.strip()]
     ef_date = os.environ.get("EF_DATE", "").strip()
+    ef_mode = os.environ.get("EF_MODE", "").strip().lower()
+    ef_flight_key = os.environ.get("EF_FLIGHT_KEY", "").strip().upper()
     targeted_route = bool(ef_origins and ef_dests and ef_date)
 
     watches_resp = http_json(f"{args.worker_url.rstrip('/')}/api/watches")
     watches = watches_resp.get("watches") or []
 
     avail_pairs = set()
-    if targeted_route:
+    if ef_mode == "seatmap_only" and ef_flight_key:
+        print(f"[targeted-seatmap] single flight mode for {ef_flight_key}")
+    elif targeted_route:
         for o in ef_origins:
             for d in ef_dests:
                 if o != d:
                     avail_pairs.add((o, d, ef_date))
-        print(f"[targeted] syncing {len(avail_pairs)} route pair(s) for {ef_date}")
+        print(f"[targeted] syncing {len(avail_pairs)} route pair(s) for {ef_date} (mode={ef_mode or 'full'})")
     else:
         today_dt = datetime.now(timezone.utc)
         for off in (0, 1):
@@ -656,6 +660,31 @@ def main() -> int:
                 print(f"[availability] synced {len(avail_flights)} direct flights -> {resp}")
             except Exception as e:
                 print(f"[availability] warning: {e}", file=sys.stderr)
+
+        if ef_mode == "avail_only":
+            print("[targeted] avail_only mode — skipping seat maps")
+            return []
+
+        if ef_mode == "seatmap_only" and ef_flight_key:
+            m = re.match(r"^([A-Z0-9]{2})(\d+)-([A-Z]{3})-([A-Z]{3})-(\d{4}-\d{2}-\d{2})$", ef_flight_key)
+            if not m:
+                print(f"[targeted-seatmap] invalid flight_key: {ef_flight_key}", file=sys.stderr)
+                return []
+            w_match = next((w for w in watches if w.get("flight_key") == ef_flight_key), None)
+            return [
+                {
+                    "flightKey": ef_flight_key,
+                    "airline": m.group(1),
+                    "flightNumber": f"{m.group(1)}{m.group(2)}",
+                    "flight_num": m.group(2),
+                    "origin": m.group(3),
+                    "destination": m.group(4),
+                    "departure_date": m.group(5),
+                    "departure_time": str((w_match or {}).get("departure_time") or "18:00"),
+                    "ef_buckets": str((w_match or {}).get("ef_buckets") or ""),
+                    "reason": "on-demand seat map",
+                }
+            ]
 
         force_sync = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
         queries: list[dict[str, Any]] = []

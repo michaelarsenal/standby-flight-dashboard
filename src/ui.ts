@@ -587,6 +587,8 @@ export function renderHtml(): string {
       '</div>';
     }
 
+    const pendingSeatmapKeys = new Set();
+
     function stopEfTimers() {
       if (efPollTimer) { clearInterval(efPollTimer); efPollTimer = null; }
       if (efClockTimer) { clearInterval(efClockTimer); efClockTimer = null; }
@@ -600,13 +602,28 @@ export function renderHtml(): string {
       }
       const bucketsDone = latestCandidates.filter(function(c) { return Boolean(c.fareBuckets); }).length;
       const seatsDone = latestCandidates.filter(function(c) { return c.cabins && (c.cabins.economy.total > 0 || c.cabins.business.total > 0); }).length;
-      const allDone = bucketsDone === total && seatsDone === total;
+
+      // Clear any pending seatmap keys that now have seatmap data
+      latestCandidates.forEach(function(c) {
+        if (c.cabins && (c.cabins.economy.total > 0 || c.cabins.business.total > 0)) {
+          pendingSeatmapKeys.delete(c.flightKey);
+        }
+      });
+
+      const waitingForBuckets = bucketsDone < total;
+      const waitingForRequestedSeats = pendingSeatmapKeys.size > 0;
+      const allDone = !waitingForBuckets && !waitingForRequestedSeats;
 
       const steps = [
         { done: true, label: "Schedule & weather — done" },
         { done: true, label: "FlightAware delays & links — done" },
-        { done: bucketsDone === total, label: bucketsDone === total ? "EF fare buckets — done (" + bucketsDone + "/" + total + ")" : (isPolling ? "Syncing EF fare buckets (" + bucketsDone + "/" + total + ")..." : "EF fare buckets (" + bucketsDone + "/" + total + ")") },
-        { done: seatsDone === total, label: seatsDone === total ? "EF seat maps — done (" + seatsDone + "/" + total + ")" : (isPolling ? "Syncing EF seat maps (" + seatsDone + "/" + total + ")..." : "EF seat maps (" + seatsDone + "/" + total + ")") }
+        { done: !waitingForBuckets, label: !waitingForBuckets ? "EF fare buckets — done (" + bucketsDone + "/" + total + ")" : (isPolling ? "Syncing EF fare buckets (" + bucketsDone + "/" + total + ")..." : "EF fare buckets (" + bucketsDone + "/" + total + ")") },
+        {
+          done: !waitingForRequestedSeats,
+          label: waitingForRequestedSeats
+            ? "Loading requested seat map (" + pendingSeatmapKeys.size + " remaining)..."
+            : (seatsDone > 0 ? "Seat maps loaded (" + seatsDone + "/" + total + ")" : "Seat maps on demand (+Watch or Load Seat Map)")
+        }
       ];
       if (!allDone && !isPolling && pollCount >= 60) {
         steps.push({ done: true, label: "Timed out after 5m — click Refresh EF to retry" });
@@ -656,6 +673,8 @@ export function renderHtml(): string {
               if (upd.standbyScore !== null) next.standbyScore = upd.standbyScore;
               if (upd.readiness) next.readiness = upd.readiness;
               if (upd.reasons) next.reasons = upd.reasons;
+              pendingSeatmapKeys.delete(c.flightKey);
+              pendingSeatmapKeys.delete(next.flightKey);
               changed = true;
             }
             return next;
@@ -813,7 +832,12 @@ export function renderHtml(): string {
 
         const statusBadgesHtml = totCap > 0
           ? '<div style="display:flex;align-items:center;"><span class="score-badge ' + badgeClass(c.readiness) + '" title="Standby Score: ' + c.standbyScore + '/100">' + badgeText(c.readiness, c.standbyScore) + '</span>' + riskPill + '</div>'
-          : '<div style="display:flex;align-items:center;"><span class="pill" style="color:#94a3b8;border-color:rgba(148,163,184,0.3);background:rgba(148,163,184,0.12);">PENDING DATA</span></div>';
+          : '<div style="display:flex;align-items:center;"><span class="pill" style="color:' + (c.fareBuckets ? '#7dd3fc' : '#94a3b8') + ';border-color:' + (c.fareBuckets ? 'rgba(56,189,248,0.4)' : 'rgba(148,163,184,0.3)') + ';background:' + (c.fareBuckets ? 'rgba(56,189,248,0.12)' : 'rgba(148,163,184,0.12)') + ';">' + (c.fareBuckets ? 'BUCKETS ONLY' : 'PENDING DATA') + '</span></div>';
+
+        const isLoadingSm = pendingSeatmapKeys.has(c.flightKey);
+        const loadSeatmapBtn = totCap === 0
+          ? '<button class="btn-ghost" onclick="loadSingleSeatmap(' + idx + ')" ' + (isLoadingSm ? 'disabled' : '') + '>' + (isLoadingSm ? 'Loading Seat Map...' : 'Load Seat Map') + '</button>'
+          : '<button class="btn-ghost" onclick="openSeatmap(\\'' + c.flightKey + '\\', \\'' + c.flightNumber + '\\')">Seat Map</button>';
 
         return '<div class="flight-card">' +
           '<div class="flight-top">' +
@@ -829,11 +853,29 @@ export function renderHtml(): string {
           economyComfortBar +
           riskNotes +
           '<div class="actions-row">' +
-            '<button class="btn-ghost" onclick="openSeatmap(\\'' + c.flightKey + '\\', \\'' + c.flightNumber + '\\')">Seat Map</button>' +
+            loadSeatmapBtn +
             '<button class="btn-ghost btn-watch ' + (c.watched ? 'active' : '') + '" onclick="toggleWatch(' + idx + ')">' + (c.watched ? 'Watching ✓' : '+ Watch Flight') + '</button>' +
           '</div>' +
         '</div>';
       }).join("");
+    }
+
+    async function loadSingleSeatmap(idx) {
+      const c = latestCandidates[idx];
+      if (!c) return;
+      const targetCabin = document.getElementById("targetCabin").value;
+      const date = c.departureDate || document.getElementById("date").value;
+      pendingSeatmapKeys.add(c.flightKey);
+      searchStartedAt = Date.now();
+      renderCandidates(targetCabin);
+      try {
+        await fetch("/api/expertflyer/seatmap-trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flightKey: c.flightKey })
+        });
+      } catch (e) {}
+      startEfPolling(date, targetCabin);
     }
 
     async function toggleWatch(idx) {
@@ -846,12 +888,18 @@ export function renderHtml(): string {
         await fetch("/api/watches/" + encodeURIComponent(c.flightKey), { method: "DELETE" });
         c.watched = false;
       } else {
-        await fetch("/api/watches", {
+        const res = await fetch("/api/watches", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ candidate: c, targetCabin, efBuckets })
         });
+        const data = await res.json().catch(function() { return {}; });
         c.watched = true;
+        if (data.seatmapTriggered) {
+          pendingSeatmapKeys.add(c.flightKey);
+          searchStartedAt = Date.now();
+          startEfPolling(c.departureDate || document.getElementById("date").value, targetCabin);
+        }
       }
       renderCandidates(targetCabin);
       loadWatches();

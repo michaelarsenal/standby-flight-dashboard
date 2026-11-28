@@ -406,11 +406,9 @@ export default {
       });
 
       let efSyncTriggered = false;
-      const missingEf = result.candidates.some(
-        (c) => (c.cabins.economy.total === 0 && c.cabins.business.total === 0) || !c.fareBuckets
-      );
+      const missingEf = result.candidates.some((c) => !c.fareBuckets);
       if (missingEf && env.GITHUB_TOKEN && env.DB && result.mode === "live" && result.candidates.length > 0) {
-        const dispatchKey = `auto_ef_dispatch:${result.expandedOrigins.join(",")}:${result.expandedDestinations.join(",")}:${date}`;
+        const dispatchKey = `auto_ef_avail:${result.expandedOrigins.join(",")}:${result.expandedDestinations.join(",")}:${date}`;
         const lastRaw = await getSetting(env.DB, dispatchKey);
         const lastMs = lastRaw ? Number(lastRaw) : 0;
         if (!lastMs || Date.now() - lastMs > 120_000) {
@@ -430,6 +428,7 @@ export default {
                     origins: result.expandedOrigins.join(","),
                     destinations: result.expandedDestinations.join(","),
                     date,
+                    mode: "avail_only",
                   },
                 }),
               }
@@ -511,6 +510,44 @@ export default {
         };
       }
       return jsonResponse({ items });
+    }
+
+    if (path === "/api/expertflyer/seatmap-trigger" && request.method === "POST") {
+      if (!env.GITHUB_TOKEN) {
+        return jsonResponse({ ok: false, error: "GITHUB_TOKEN not configured" }, 400);
+      }
+      const body = (await request.json()) as { flightKey?: string };
+      const flightKey = String(body.flightKey || "").trim().toUpperCase();
+      if (!flightKey) return jsonResponse({ ok: false, error: "Missing flightKey" }, 400);
+      if (env.DB) {
+        const cdKey = `seatmap_dispatch:${flightKey}`;
+        const lastRaw = await getSetting(env.DB, cdKey);
+        const lastMs = lastRaw ? Number(lastRaw) : 0;
+        if (lastMs && Date.now() - lastMs <= 60_000) {
+          return jsonResponse({ ok: true, flightKey, deduplicated: true });
+        }
+        await setSetting(env.DB, cdKey, String(Date.now()));
+      }
+      const ghRes = await fetch(
+        "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "standby-flight-dashboard-worker",
+          },
+          body: JSON.stringify({
+            ref: "main",
+            inputs: { mode: "seatmap_only", flight_key: flightKey },
+          }),
+        }
+      );
+      if (!ghRes.ok) {
+        const errTxt = await ghRes.text();
+        return jsonResponse({ ok: false, error: `GitHub dispatch failed (${ghRes.status}): ${errTxt.slice(0, 120)}` }, 502);
+      }
+      return jsonResponse({ ok: true, flightKey });
     }
 
     if (path === "/api/score" && request.method === "POST") {
@@ -723,7 +760,27 @@ export default {
       await upsertWatch(env.DB, body.candidate, body.targetCabin || "economy", body.efBuckets);
       const hrs = hoursUntilDeparture(body.candidate.departureDate, body.candidate.departureTime);
       await recordSnapshot(env.DB, body.candidate, hrs, "Initial watch");
-      return jsonResponse({ ok: true });
+      const hasSeatData = body.candidate.cabins && (body.candidate.cabins.economy.total > 0 || body.candidate.cabins.business.total > 0);
+      if (!hasSeatData && env.GITHUB_TOKEN) {
+        try {
+          await fetch(
+            "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "standby-flight-dashboard-worker",
+              },
+              body: JSON.stringify({
+                ref: "main",
+                inputs: { mode: "seatmap_only", flight_key: body.candidate.flightKey },
+              }),
+            }
+          );
+        } catch {}
+      }
+      return jsonResponse({ ok: true, seatmapTriggered: !hasSeatData && Boolean(env.GITHUB_TOKEN) });
     }
 
     if (path === "/api/watches/manual" && request.method === "POST") {
@@ -768,6 +825,25 @@ export default {
         watched: true,
       };
       await upsertWatch(env.DB, candidate, body.targetCabin || "economy", null);
+      if (env.GITHUB_TOKEN) {
+        try {
+          await fetch(
+            "https://api.github.com/repos/michaelarsenal/standby-flight-dashboard/actions/workflows/expertflyer-sync.yml/dispatches",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "standby-flight-dashboard-worker",
+              },
+              body: JSON.stringify({
+                ref: "main",
+                inputs: { mode: "seatmap_only", flight_key: flightKey },
+              }),
+            }
+          );
+        } catch {}
+      }
       return jsonResponse({ ok: true, flightKey });
     }
 
