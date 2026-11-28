@@ -118,6 +118,7 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
 
     compact_sections: list[dict[str, Any]] = []
     seen_first = False
+    unknown_types: dict[str, Any] = {}
     for sec in sections:
         code = str(sec.get("displayCabinCode") or sec.get("cabinCode") or "").upper()
         sec_name = str(sec.get("cabinName") or sec.get("name") or sec.get("title") or "").lower()
@@ -137,9 +138,10 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
             c_seats: list[dict[str, Any]] = []
             for s in row.get("seats") or []:
                 stype = str(s.get("type") or "")
-                if stype == "seat":
+                st = str(s.get("status") or "").lower()
+                has_seat_status = st in ("available", "occupied", "blocked")
+                if stype == "seat" or has_seat_status:
                     cabins[key]["total"] += 1
-                    st = str(s.get("status") or "").lower()
                     if st == "available":
                         cabins[key]["available"] += 1
                     elif st == "occupied":
@@ -153,6 +155,8 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
                         "p": 1 if (s.get("isChargeable") or s.get("isPaidPremium")) else 0,
                     })
                 else:
+                    if stype not in ("aisle", "empty", "galley", "lavatory", "exit", "wing") and stype not in unknown_types:
+                        unknown_types[stype] = s
                     c_seats.append({"t": stype[:1] or "e"})
             c_rows.append({
                 "n": row.get("rowNumber"),
@@ -172,6 +176,9 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
     info = obj["seatMap"].get("info") or {}
     if isinstance(info.get("aircraft"), dict):
         aircraft = str(info["aircraft"].get("type") or info["aircraft"].get("equipmentCode") or "")
+
+    if unknown_types:
+        print(f"  [seatmap] unknown seat types for {aircraft}: {json.dumps(unknown_types)[:500]}")
 
     return {"cabins": cabins, "aircraft": aircraft, "seatmap": {"sections": compact_sections}}
 
