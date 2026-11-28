@@ -1,6 +1,41 @@
 import { recordTrigger } from "./db.ts";
 import type { Env, FlightCandidate, InboundFlightInfo, ReadinessLevel, WatchedFlight } from "./types.ts";
 
+async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
+  const apiKey = (env.GEMINI_API_KEY || "").trim();
+  if (!apiKey) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(4000),
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `You are a concise airline standby travel assistant. Summarize this flight alert in 1-2 short plain-text sentences (no markdown, max 220 chars) with actionable standby advice:\n\n${context}`,
+                },
+              ],
+            },
+          ],
+          generationConfig: { maxOutputTokens: 100, temperature: 0.2 },
+        }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    return txt || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function sendNtfyPush(
   topic: string,
   title: string,
@@ -32,7 +67,7 @@ export async function sendStagePushAlert(
   stageLabel: string
 ): Promise<boolean> {
   const title = `${watch.flight_number} Inbound ${inbound.inboundFlight}: ${stageLabel}`;
-  const body = [
+  const baseBody = [
     `${inbound.inboundFlight} (${inbound.origin} → ${inbound.destination}${inbound.registration ? `, ${inbound.registration}` : ""})`,
     inbound.impactSummary,
     inbound.surfaceCongestion ? inbound.surfaceCongestion.summary : "",
@@ -41,6 +76,16 @@ export async function sendStagePushAlert(
   ]
     .filter(Boolean)
     .join("\n");
+
+  const isMajorInbound =
+    inbound.stage === "cancelled" ||
+    inbound.stage === "diverted" ||
+    inbound.outboundImpact === "high" ||
+    inbound.delayMins >= 45;
+  const aiBrief = isMajorInbound
+    ? await generateGeminiBriefing(env, `${title}\n${baseBody}`)
+    : null;
+  const body = aiBrief ? `${baseBody}\nGemini: ${aiBrief}` : baseBody;
 
   const topic = ntfyTopic || env.NTFY_TOPIC || "";
   let sent = false;
@@ -103,10 +148,12 @@ export async function sendSeatMonitorAlert(
   title: string,
   message: string
 ): Promise<boolean> {
+  const aiBrief = await generateGeminiBriefing(env, `${title}\n${message}`);
+  const finalMsg = aiBrief ? `${message}\nGemini: ${aiBrief}` : message;
   const topic = ntfyTopic || env.NTFY_TOPIC || "";
   let sent = false;
   if (topic) {
-    sent = await sendNtfyPush(topic, title, message, {
+    sent = await sendNtfyPush(topic, title, finalMsg, {
       priority: "high",
       tags: "seat,warning",
     });
@@ -153,10 +200,12 @@ export async function sendOutboundAlert(
   message: string,
   urgent = false
 ): Promise<boolean> {
+  const aiBrief = urgent ? await generateGeminiBriefing(env, `${title}\n${message}`) : null;
+  const finalMsg = aiBrief ? `${message}\nGemini: ${aiBrief}` : message;
   const topic = ntfyTopic || env.NTFY_TOPIC || "";
   let sent = false;
   if (topic) {
-    sent = await sendNtfyPush(topic, title, message, {
+    sent = await sendNtfyPush(topic, title, finalMsg, {
       priority: urgent ? "high" : "default",
       tags: urgent ? "rotating_light,airplane" : "airplane,information_source",
     });
@@ -213,12 +262,27 @@ export async function sendStandbyAlert(
     } catch {}
   }
 
+  const badge = flight.readiness.toUpperCase();
+  const aiBrief = await generateGeminiBriefing(
+    env,
+    `${flight.flightNumber} ${flight.origin}->${flight.destination} (${flight.departureDate} ${flight.departureTime}) flipped ${previousStatus ?? "NEW"} -> ${badge} (${flight.standbyScore}/100). Reasons: ${reasonSummary}. Economy open: ${flight.cabins.economy.available} avail / ${flight.cabins.economy.blocked} blk.`
+  );
+  const fullSummary = aiBrief ? `${reasonSummary}\nGemini: ${aiBrief}` : reasonSummary;
+
+  if (env.NTFY_TOPIC) {
+    await sendNtfyPush(
+      env.NTFY_TOPIC,
+      `[Standby ${badge}] ${flight.flightNumber} (${flight.standbyScore}/100)`,
+      `${previousStatus ?? "NEW"} → ${badge}: ${fullSummary}`,
+      { priority: flight.readiness === "red" ? "high" : "default", tags: "airplane" }
+    );
+  }
+
   if (!env.RESEND_API_KEY || !env.ALERT_EMAIL_TO) {
     return false;
   }
 
   const from = env.ALERT_EMAIL_FROM || "Standby Monitor <onboarding@resend.dev>";
-  const badge = flight.readiness.toUpperCase();
   const subject = `[Standby ${badge}] ${flight.flightNumber} ${flight.origin}->${flight.destination} (${flight.departureDate}) - Score ${flight.standbyScore}/100`;
 
   const html = `

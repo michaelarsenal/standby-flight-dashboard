@@ -226,4 +226,5 @@ export interface Env {
   ALERT_EMAIL_FROM?: string;
   NTFY_TOPIC?: string;
   GITHUB_TOKEN?: string;
+  GEMINI_API_KEY?: string;
 }
