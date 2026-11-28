@@ -1256,7 +1256,7 @@ export default {
       }
 
       if (w) {
-        const hadRealBaseline = Boolean(prevSnap) && Boolean(w.last_status) && w.last_status !== "pending";
+        const hadRealBaseline = Boolean(prevSnap) && Boolean(w.last_status) && String(w.last_status) !== "pending";
         if (hadRealBaseline && w.last_status !== rescored.readiness) {
           await sendStandbyAlert(
             env,
@@ -1662,7 +1662,7 @@ export default {
 
       await recordSnapshot(env.DB, updated, hrs);
 
-      if (w.last_status && w.last_status !== "pending" && w.last_status !== updated.readiness) {
+      if (w.last_status && String(w.last_status) !== "pending" && w.last_status !== updated.readiness) {
         await sendStandbyAlert(
           env,
           updated,
