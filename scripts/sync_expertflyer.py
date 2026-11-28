@@ -117,11 +117,21 @@ def parse_seatmap_payload(raw_text: str) -> dict[str, Any] | None:
     }
 
     compact_sections: list[dict[str, Any]] = []
+    seen_first = False
     for sec in sections:
-        code = str(sec.get("cabinCode") or sec.get("displayCabinCode") or "").upper()
+        code = str(sec.get("displayCabinCode") or sec.get("cabinCode") or "").upper()
+        sec_name = str(sec.get("cabinName") or sec.get("name") or sec.get("title") or "").lower()
+        if "business" in sec_name or "club" in sec_name or "upper" in sec_name:
+            code = "J"
         key = CABIN_MAP.get(code)
         if not key:
             continue
+        if key == "first":
+            if seen_first:
+                key = "business"
+                code = "J"
+            else:
+                seen_first = True
         c_rows: list[dict[str, Any]] = []
         for row in sec.get("rows") or []:
             c_seats: list[dict[str, Any]] = []

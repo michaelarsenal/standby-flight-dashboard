@@ -72,16 +72,27 @@ function cabinFromSnapshot(
 }
 
 function applyExpertFlyerSnapshot(
-  c: { cabins: Record<CabinKey, CabinSeatSummary> },
+  c: { cabins: Record<CabinKey, CabinSeatSummary>; fareBuckets?: { firstMax: number | null; businessMax: number | null } | null },
   snap: SeatSnapshot | undefined
 ): Record<CabinKey, CabinSeatSummary> {
   if (!snap) return c.cabins;
-  return {
+  const cabins = {
     first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, c.cabins.first.total),
     business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, c.cabins.business.total),
     prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, c.cabins.prem_econ.total),
     economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, c.cabins.economy.total),
   };
+  if (
+    c.fareBuckets &&
+    c.fareBuckets.firstMax === null &&
+    c.fareBuckets.businessMax !== null &&
+    cabins.first.total > 0 &&
+    cabins.business.total === 0
+  ) {
+    cabins.business = { ...cabins.first };
+    cabins.first = { available: 0, occupied: 0, blocked: 0, total: 0 };
+  }
+  return cabins;
 }
 
 function hoursUntilDeparture(date: string, time: string): number | null {
@@ -1137,6 +1148,24 @@ export default {
       }
 
       const fareBuckets = parseFareBuckets(w?.ef_buckets || body.efBuckets || null, airline);
+      if (
+        fareBuckets &&
+        fareBuckets.firstMax === null &&
+        fareBuckets.businessMax !== null &&
+        mergedCabins.first.total > 0 &&
+        mergedCabins.business.total === 0
+      ) {
+        mergedCabins.business = { ...mergedCabins.first };
+        mergedCabins.first = { available: 0, occupied: 0, blocked: 0, total: 0 };
+        if (mergedSeatmap && Array.isArray(mergedSeatmap.sections)) {
+          mergedSeatmap = {
+            ...mergedSeatmap,
+            sections: mergedSeatmap.sections.map((sec: any) =>
+              sec?.cabin === "first" ? { ...sec, cabin: "business", code: "J" } : sec
+            ),
+          };
+        }
+      }
       const hrs = hoursUntilDeparture(departureDate, departureTime);
       const rescored = computeStandbyScore({
         cabins: mergedCabins,
