@@ -7,7 +7,8 @@ export async function generateGeminiBriefingWithDebug(
 ): Promise<{ text: string | null; error: string | null }> {
   const apiKey = (env.GEMINI_API_KEY || "").trim();
   if (!apiKey) return { text: null, error: "GEMINI_API_KEY not set" };
-  for (const model of ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]) {
+  let lastErr = "No supported Gemini Flash model found";
+  for (const model of ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]) {
     try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
@@ -17,7 +18,7 @@ export async function generateGeminiBriefingWithDebug(
             "Content-Type": "application/json",
             "x-goog-api-key": apiKey,
           },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(4500),
           body: JSON.stringify({
             contents: [
               {
@@ -36,7 +37,10 @@ export async function generateGeminiBriefingWithDebug(
           }),
         }
       );
-      if (res.status === 404 || res.status === 429 || res.status >= 500) continue;
+      if (res.status === 404 || res.status === 429 || res.status >= 500) {
+        lastErr = `HTTP ${res.status} (${model})`;
+        continue;
+      }
       if (!res.ok) {
         const errTxt = await res.text().catch(() => "");
         return { text: null, error: `HTTP ${res.status} (${model}): ${errTxt.slice(0, 160)}` };
@@ -46,12 +50,13 @@ export async function generateGeminiBriefingWithDebug(
       };
       const txt = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
       if (txt) return { text: txt, error: null };
-      return { text: null, error: `Empty response from ${model}` };
+      lastErr = `Empty response from ${model}`;
     } catch (e: any) {
-      return { text: null, error: String(e?.message || e || "Request failed") };
+      lastErr = `${model}: ${String(e?.message || e || "Request failed")}`;
+      continue;
     }
   }
-  return { text: null, error: "No supported Gemini Flash model found (404)" };
+  return { text: null, error: lastErr };
 }
 
 export async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
