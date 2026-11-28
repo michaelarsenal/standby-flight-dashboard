@@ -586,9 +586,12 @@ export default {
       if (!env.DB) return jsonResponse({ items: {} });
       const keysParam = url.searchParams.get("keys") || "";
       const date = url.searchParams.get("date") || "";
+      const originsRaw = url.searchParams.get("origins") || "";
+      const destinationsRaw = url.searchParams.get("destinations") || "";
+      const airlinesRaw = url.searchParams.get("airlines") || "BA,VS";
       const targetCabin = (url.searchParams.get("targetCabin") || "economy") as CabinKey;
       const keys = keysParam.split(",").map((k) => k.trim()).filter(Boolean);
-      if (keys.length === 0) return jsonResponse({ items: {} });
+      if (keys.length === 0) return jsonResponse({ items: {}, routeKeys: [] });
 
       const normKey = (k: string) => k.replace(/^([A-Z0-9]{2})-\1(\d+-)/, "$1$2");
       const lookupKeys = Array.from(new Set(keys.flatMap((k) => [k, normKey(k)])));
@@ -598,6 +601,25 @@ export default {
         getEfSeatmapsByKeys(env.DB, lookupKeys),
       ]);
       const efFlightByKey = new Map(efFlights.map((f) => [f.flight_key, f]));
+      const expOrigins = originsRaw ? expandAirportInput(originsRaw) : [];
+      const expDests = destinationsRaw ? expandAirportInput(destinationsRaw) : [];
+      const airlineSet = new Set(
+        airlinesRaw
+          .toUpperCase()
+          .split(/[,\s]+/)
+          .filter((a) => /^[A-Z0-9]{2}$/.test(a))
+      );
+      const routeKeys =
+        expOrigins.length > 0 && expDests.length > 0
+          ? efFlights
+              .filter(
+                (ef) =>
+                  expOrigins.includes(ef.origin) &&
+                  expDests.includes(ef.destination) &&
+                  (airlineSet.size === 0 || airlineSet.has(ef.airline))
+              )
+              .map((ef) => ef.flight_key)
+          : [];
       const items: Record<string, any> = {};
 
       for (const fk of keys) {
@@ -645,7 +667,7 @@ export default {
           lastSeatmapAt: snap?.captured_at || null,
         };
       }
-      return jsonResponse({ items });
+      return jsonResponse({ items, routeKeys });
     }
 
     if (path === "/api/expertflyer/seatmap-trigger" && request.method === "POST") {

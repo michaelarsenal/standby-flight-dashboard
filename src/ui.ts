@@ -650,10 +650,29 @@ export function renderHtml(): string {
           return;
         }
         try {
-          const qs = new URLSearchParams({ keys: keys.join(","), date: date, targetCabin: targetCabin });
+          const qs = new URLSearchParams({
+            keys: keys.join(","),
+            date: date,
+            origins: document.getElementById("origins").value,
+            destinations: document.getElementById("destinations").value,
+            airlines: document.getElementById("airlines").value,
+            targetCabin: targetCabin
+          });
           const res = await fetch("/api/ef-status?" + qs.toString());
           if (!res.ok) return;
           const data = await res.json();
+          const routeKeys = data.routeKeys || [];
+          if (routeKeys.length > 0 && !reconciledThisSearch) {
+            const curSet = new Set(keys);
+            const routeSet = new Set(routeKeys);
+            const mismatch = keys.some(function(k) { return !routeSet.has(k); }) || routeKeys.some(function(k) { return !curSet.has(k); });
+            if (mismatch) {
+              reconciledThisSearch = true;
+              stopEfTimers();
+              runSearch(null, true);
+              return;
+            }
+          }
           const items = data.items || {};
           let changed = false;
           latestCandidates = latestCandidates.map(function(c) {
@@ -690,10 +709,15 @@ export function renderHtml(): string {
       }, 5000);
     }
 
-    async function runSearch(e) {
+    let reconciledThisSearch = false;
+
+    async function runSearch(e, isReconcile) {
       if (e) e.preventDefault();
       stopEfTimers();
-      searchStartedAt = Date.now();
+      if (!isReconcile) {
+        searchStartedAt = Date.now();
+        reconciledThisSearch = false;
+      }
       const origins = document.getElementById("origins").value;
       const destinations = document.getElementById("destinations").value;
       const date = document.getElementById("date").value;
