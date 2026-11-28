@@ -424,7 +424,6 @@ export default {
               telemetry = await fetchWatchedFlightTelemetry(
                 env.FLIGHTAWARE_API_KEY,
                 w.flight_number,
-                w.origin,
                 w.departure_date,
                 w.departure_time || undefined
               );
