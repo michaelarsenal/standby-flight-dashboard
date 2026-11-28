@@ -7,46 +7,51 @@ export async function generateGeminiBriefingWithDebug(
 ): Promise<{ text: string | null; error: string | null }> {
   const apiKey = (env.GEMINI_API_KEY || "").trim();
   if (!apiKey) return { text: null, error: "GEMINI_API_KEY not set" };
-  try {
-    const res = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        signal: AbortSignal.timeout(5000),
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `You are a concise airline standby travel assistant. Summarize this flight alert in 1-2 short plain-text sentences (no markdown, max 220 chars) with actionable standby advice:\n\n${context}`,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            maxOutputTokens: 200,
-            temperature: 0.2,
-            thinkingConfig: { thinkingBudget: 0 },
+  for (const model of ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
           },
-        }),
+          signal: AbortSignal.timeout(5000),
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `You are a concise airline standby travel assistant. Summarize this flight alert in 1-2 short plain-text sentences (no markdown, max 220 chars) with actionable standby advice:\n\n${context}`,
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              maxOutputTokens: 200,
+              temperature: 0.2,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        }
+      );
+      if (res.status === 404) continue;
+      if (!res.ok) {
+        const errTxt = await res.text().catch(() => "");
+        return { text: null, error: `HTTP ${res.status} (${model}): ${errTxt.slice(0, 160)}` };
       }
-    );
-    if (!res.ok) {
-      const errTxt = await res.text().catch(() => "");
-      return { text: null, error: `HTTP ${res.status}: ${errTxt.slice(0, 160)}` };
+      const data = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const txt = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
+      if (txt) return { text: txt, error: null };
+      return { text: null, error: `Empty response from ${model}` };
+    } catch (e: any) {
+      return { text: null, error: String(e?.message || e || "Request failed") };
     }
-    const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
-    const txt = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
-    return txt ? { text: txt, error: null } : { text: null, error: "Empty response from Gemini" };
-  } catch (e: any) {
-    return { text: null, error: String(e?.message || e || "Request failed") };
   }
+  return { text: null, error: "No supported Gemini Flash model found (404)" };
 }
 
 export async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
