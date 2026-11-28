@@ -64,6 +64,15 @@ export async function ensureSchema(db: D1Database): Promise<void> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS triggers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      flight_key TEXT NOT NULL,
+      flight_number TEXT NOT NULL,
+      category TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      triggered_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`),
   ]);
   for (const col of [
     "ALTER TABLE watches ADD COLUMN alert_stages TEXT",
@@ -275,6 +284,39 @@ export async function setSetting(db: D1Database, key: string, value: string): Pr
     .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     .bind(key, value.trim())
     .run();
+}
+
+export interface TriggerRecord {
+  id: number;
+  flight_key: string;
+  flight_number: string;
+  category: string;
+  title: string;
+  detail: string;
+  triggered_at: string;
+}
+
+export async function recordTrigger(
+  db: D1Database,
+  params: { flightKey: string; flightNumber: string; category: string; title: string; detail: string }
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare(
+      `INSERT INTO triggers (flight_key, flight_number, category, title, detail, triggered_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`
+    )
+    .bind(params.flightKey, params.flightNumber, params.category, params.title, params.detail)
+    .run();
+}
+
+export async function listRecentTriggers(db: D1Database, limit = 25): Promise<TriggerRecord[]> {
+  await ensureSchema(db);
+  const res = await db
+    .prepare("SELECT * FROM triggers ORDER BY id DESC LIMIT ?")
+    .bind(limit)
+    .all<TriggerRecord>();
+  return res.results ?? [];
 }
 
 export async function recordSnapshot(

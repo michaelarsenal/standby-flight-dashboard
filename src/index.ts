@@ -9,6 +9,7 @@ import {
   getSetting,
   getSnapshots,
   listEfFlights,
+  listRecentTriggers,
   listWatches,
   parseAlertStages,
   recordSnapshot,
@@ -386,6 +387,142 @@ export default {
         hasFlightAware: Boolean(env.FLIGHTAWARE_API_KEY),
         hasD1: Boolean(env.DB),
         hasAlerts: Boolean(env.RESEND_API_KEY && env.ALERT_EMAIL_TO),
+      });
+    }
+
+    if ((path === "/api/summary.json" || path === "/api/data.json") && request.method === "GET") {
+      const generatedAt = new Date().toISOString();
+      const dashboardUrl = `${url.protocol}//${url.host}`;
+      if (!env.DB) {
+        return jsonResponse({ generatedAt, dashboardUrl, watchedCount: 0, watchedFlights: [], recentTriggers: [] });
+      }
+      const cutoff = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const [watches, efMap, recentTriggers] = await Promise.all([
+        listWatches(env.DB),
+        getLatestExpertFlyerSnapshots(env.DB),
+        listRecentTriggers(env.DB, 25),
+      ]);
+
+      const watchedFlights = await Promise.all(
+        watches.map(async (w) => {
+          const snap = efMap.get(w.flight_key);
+          const cabins = snap
+            ? {
+                first: cabinFromSnapshot(snap.first_open, snap.first_occupied, snap.first_blocked, 0),
+                business: cabinFromSnapshot(snap.business_open, snap.business_occupied, snap.business_blocked, 0),
+                prem_econ: cabinFromSnapshot(snap.prem_econ_open, snap.prem_econ_occupied, snap.prem_econ_blocked, 0),
+                economy: cabinFromSnapshot(snap.economy_open, snap.economy_occupied, snap.economy_blocked, 0),
+              }
+            : null;
+          let seatState: Record<string, any> | null = null;
+          if (w.last_seat_state) {
+            try { seatState = JSON.parse(w.last_seat_state); } catch {}
+          }
+          let telemetry: { inbound: any; outbound: any } = { inbound: null, outbound: null };
+          if (env.FLIGHTAWARE_API_KEY && w.departure_date >= cutoff && !w.archived) {
+            try {
+              telemetry = await fetchWatchedFlightTelemetry(
+                env.FLIGHTAWARE_API_KEY,
+                w.flight_number,
+                w.origin,
+                w.departure_date,
+                w.departure_time || undefined
+              );
+            } catch {}
+          }
+          if (path === "/api/data.json") {
+            return {
+              ...w,
+              cabins,
+              seatState,
+              lastSeatmapAt: snap?.captured_at || null,
+              inbound: telemetry.inbound,
+              outbound: telemetry.outbound,
+            };
+          }
+          const fmtCab = (c: CabinSeatSummary | undefined) =>
+            c && c.total > 0 ? `${c.total}/${c.available + c.blocked} (${c.available} avail, ${c.blocked} blk)` : null;
+          const totalCap = cabins
+            ? cabins.first.total + cabins.business.total + cabins.prem_econ.total + cabins.economy.total
+            : 0;
+          const totalOpen = cabins
+            ? (cabins.first.available + cabins.first.blocked) +
+              (cabins.business.available + cabins.business.blocked) +
+              (cabins.prem_econ.available + cabins.prem_econ.blocked) +
+              (cabins.economy.available + cabins.economy.blocked)
+            : 0;
+          return {
+            flightKey: w.flight_key,
+            flightNumber: w.flight_number,
+            route: `${w.origin} -> ${w.destination}`,
+            departureDate: w.departure_date,
+            departureTime: w.departure_time,
+            aircraft: w.aircraft,
+            readiness: w.last_status,
+            standbyScore: w.last_score,
+            efBuckets: w.ef_buckets,
+            totalCapOpen: totalCap > 0 ? `${totalCap}/${totalOpen}` : null,
+            cabins: cabins
+              ? {
+                  F: fmtCab(cabins.first),
+                  J: fmtCab(cabins.business),
+                  W: fmtCab(cabins.prem_econ),
+                  Y: fmtCab(cabins.economy),
+                }
+              : null,
+            assignedSeat: w.assigned_seat || null,
+            seatStatus: seatState?.seatStatus || null,
+            unseatedFrom: seatState?.unseatedFrom || null,
+            lastSeatmapAt: snap?.captured_at || null,
+            inbound: telemetry.inbound
+              ? {
+                  flight: telemetry.inbound.inboundFlight,
+                  status: telemetry.inbound.status,
+                  delayMins: telemetry.inbound.delayMins,
+                  turnaroundMins: telemetry.inbound.turnaroundMins,
+                  impactSummary: telemetry.inbound.impactSummary,
+                }
+              : null,
+            outbound: telemetry.outbound
+              ? {
+                  status: telemetry.outbound.status,
+                  gate: telemetry.outbound.gate || null,
+                  delayMins: telemetry.outbound.delayMins,
+                  cancelled: telemetry.outbound.cancelled,
+                }
+              : null,
+          };
+        })
+      );
+
+      if (path === "/api/data.json") {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const tomStr = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+        const [efToday, efTomorrow] = await Promise.all([
+          listEfFlights(env.DB, todayStr),
+          listEfFlights(env.DB, tomStr),
+        ]);
+        return jsonResponse({
+          generatedAt,
+          dashboardUrl,
+          watchedFlights,
+          recentTriggers,
+          efFlights: [...efToday, ...efTomorrow],
+        });
+      }
+
+      return jsonResponse({
+        generatedAt,
+        dashboardUrl,
+        watchedCount: watchedFlights.length,
+        watchedFlights,
+        recentTriggers: recentTriggers.slice(0, 15).map((t) => ({
+          flightNumber: t.flight_number,
+          category: t.category,
+          title: t.title,
+          detail: t.detail,
+          triggeredAt: t.triggered_at,
+        })),
       });
     }
 

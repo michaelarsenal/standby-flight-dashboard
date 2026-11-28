@@ -1,3 +1,4 @@
+import { recordTrigger } from "./db.ts";
 import type { Env, FlightCandidate, InboundFlightInfo, ReadinessLevel, WatchedFlight } from "./types.ts";
 
 export async function sendNtfyPush(
@@ -80,6 +81,18 @@ export async function sendStagePushAlert(
     if (res.ok) sent = true;
   }
 
+  if (env.DB) {
+    try {
+      await recordTrigger(env.DB, {
+        flightKey: watch.flight_key,
+        flightNumber: watch.flight_number,
+        category: "inbound",
+        title,
+        detail: body.replace(/\n+/g, " · "),
+      });
+    } catch {}
+  }
+
   return sent;
 }
 
@@ -115,6 +128,18 @@ export async function sendSeatMonitorAlert(
       }),
     });
     if (res.ok) sent = true;
+  }
+
+  if (env.DB) {
+    try {
+      await recordTrigger(env.DB, {
+        flightKey: watch.flight_key,
+        flightNumber: watch.flight_number,
+        category: "seat",
+        title,
+        detail: message,
+      });
+    } catch {}
   }
 
   return sent;
@@ -155,6 +180,18 @@ export async function sendOutboundAlert(
     if (res.ok) sent = true;
   }
 
+  if (env.DB) {
+    try {
+      await recordTrigger(env.DB, {
+        flightKey: watch.flight_key,
+        flightNumber: watch.flight_number,
+        category: "outbound",
+        title,
+        detail: message,
+      });
+    } catch {}
+  }
+
   return sent;
 }
 
@@ -164,6 +201,18 @@ export async function sendStandbyAlert(
   previousStatus: ReadinessLevel | null,
   reasonSummary: string
 ): Promise<boolean> {
+  if (env.DB) {
+    try {
+      await recordTrigger(env.DB, {
+        flightKey: flight.flightKey,
+        flightNumber: flight.flightNumber,
+        category: "readiness",
+        title: `${flight.flightNumber} ${previousStatus ?? "NEW"} → ${flight.readiness.toUpperCase()} (${flight.standbyScore}/100)`,
+        detail: reasonSummary,
+      });
+    } catch {}
+  }
+
   if (!env.RESEND_API_KEY || !env.ALERT_EMAIL_TO) {
     return false;
   }

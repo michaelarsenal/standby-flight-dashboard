@@ -29,7 +29,9 @@ Interactive **Cloudflare Workers + D1 + Cron** web app (PWA-ready for desktop & 
    ```
    Or set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in GitHub Secrets for automatic deploys on push to `main`.
 
-## REST JSON Endpoints (for Browser & Future Android App)
+## REST JSON Endpoints (for Browser, Gemini & Future Android App)
+- `GET /api/summary.json` — Compact, Gemini-ready digest of watched flights, cabin loads, seat status, inbound/outbound telemetry, and `recentTriggers`
+- `GET /api/data.json` — Full normalized dataset of watched flights, recent triggers, and cached ExpertFlyer flights
 - `GET /api/search?origins=WAS&destinations=LHR&date=2026-11-27&airlines=BA,VS&targetCabin=economy`
 - `POST /api/score` — Re-score a flight candidate with pasted ExpertFlyer/`myIDTravel` buckets
 - `GET /api/watches` / `POST /api/watches` / `DELETE /api/watches/:flightKey`
