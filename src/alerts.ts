@@ -1,16 +1,22 @@
 import { recordTrigger } from "./db.ts";
 import type { Env, FlightCandidate, InboundFlightInfo, ReadinessLevel, WatchedFlight } from "./types.ts";
 
-export async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
+export async function generateGeminiBriefingWithDebug(
+  env: Env,
+  context: string
+): Promise<{ text: string | null; error: string | null }> {
   const apiKey = (env.GEMINI_API_KEY || "").trim();
-  if (!apiKey) return null;
+  if (!apiKey) return { text: null, error: "GEMINI_API_KEY not set" };
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(4000),
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        signal: AbortSignal.timeout(5000),
         body: JSON.stringify({
           contents: [
             {
@@ -21,19 +27,31 @@ export async function generateGeminiBriefing(env: Env, context: string): Promise
               ],
             },
           ],
-          generationConfig: { maxOutputTokens: 100, temperature: 0.2 },
+          generationConfig: {
+            maxOutputTokens: 200,
+            temperature: 0.2,
+            thinkingConfig: { thinkingBudget: 0 },
+          },
         }),
       }
     );
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const errTxt = await res.text().catch(() => "");
+      return { text: null, error: `HTTP ${res.status}: ${errTxt.slice(0, 160)}` };
+    }
     const data = (await res.json()) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
-    const txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    return txt || null;
-  } catch {
-    return null;
+    const txt = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
+    return txt ? { text: txt, error: null } : { text: null, error: "Empty response from Gemini" };
+  } catch (e: any) {
+    return { text: null, error: String(e?.message || e || "Request failed") };
   }
+}
+
+export async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
+  const res = await generateGeminiBriefingWithDebug(env, context);
+  return res.text;
 }
 
 export async function sendNtfyPush(
@@ -44,19 +62,27 @@ export async function sendNtfyPush(
 ): Promise<boolean> {
   const clean = topic.trim();
   if (!clean) return false;
+  const asciiTitle = title
+    .replace(/→/g, "->")
+    .replace(/[—–]/g, "-")
+    .replace(/[^\x20-\x7E]/g, "");
   const headers: Record<string, string> = {
-    Title: title,
+    Title: asciiTitle || "Standby Flight Alert",
     Priority: opts?.priority || "default",
   };
   if (opts?.tags) headers.Tags = opts.tags;
   if (opts?.clickUrl) headers.Click = opts.clickUrl;
 
-  const res = await fetch(`https://ntfy.sh/${encodeURIComponent(clean)}`, {
-    method: "POST",
-    headers,
-    body: message,
-  });
-  return res.ok;
+  try {
+    const res = await fetch(`https://ntfy.sh/${encodeURIComponent(clean)}`, {
+      method: "POST",
+      headers,
+      body: message,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function sendStagePushAlert(
