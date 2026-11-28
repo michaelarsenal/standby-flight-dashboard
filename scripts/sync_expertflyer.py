@@ -472,9 +472,18 @@ def run_sync_session(
                 print(f"[auth] attempt={attempt} post-login url={page.url}")
                 if "/sign-in" not in page.url:
                     return True
+                try:
+                    err_txt = page.locator("[role='alert'], .cl-formFieldErrorText").first.inner_text(timeout=1000)
+                    if err_txt:
+                        print(f"[auth] clerk message: {err_txt.strip()}")
+                except Exception:
+                    pass
             return False
 
-        sign_in("/air/availability")
+        if not sign_in("/air/availability"):
+            print("[auth] sign-in failed after 2 attempts; aborting session cleanly")
+            browser.close()
+            return all_flights, seatmap_results
 
         for q in avail_queries:
             captured["avail"] = ""
