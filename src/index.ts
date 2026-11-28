@@ -1,5 +1,5 @@
 import { expandAirportInput } from "./airports.ts";
-import { sendNtfyPush, sendOutboundAlert, sendSeatMonitorAlert, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
+import { generateGeminiBriefing, sendNtfyPush, sendOutboundAlert, sendSeatMonitorAlert, sendStagePushAlert, sendStandbyAlert } from "./alerts.ts";
 import {
   archiveOldWatches,
   deleteWatch,
@@ -721,15 +721,24 @@ export default {
       const topic = String(body.ntfyTopic || "").trim();
       await setSetting(env.DB, "ntfy_topic", topic);
       let testSent = false;
+      let geminiOk = false;
       if (body.test && topic) {
+        const aiBrief = await generateGeminiBriefing(
+          env,
+          "Test alert: BA292 IAD->LHR (Score 90/100, GREEN, 95 open seats, inbound BA293 delayed)."
+        );
+        geminiOk = Boolean(aiBrief);
+        const msg =
+          "You will now receive stage alerts (ETD, Enroute, Landed, Delay/Cancel) for your watched flights." +
+          (aiBrief ? `\nGemini: ${aiBrief}` : "\n(Gemini briefing not active — check GEMINI_API_KEY)");
         testSent = await sendNtfyPush(
           topic,
           "Standby Flight Dashboard — Push Alerts Active",
-          "You will now receive stage alerts (ETD, Enroute, Landed, Delay/Cancel) for your watched flights.",
+          msg,
           { tags: "airplane,white_check_mark" }
         );
       }
-      return jsonResponse({ ok: true, ntfyTopic: topic, testSent });
+      return jsonResponse({ ok: true, ntfyTopic: topic, testSent, geminiOk });
     }
 
     if (path.startsWith("/api/watches/") && path.endsWith("/alerts") && (request.method === "PATCH" || request.method === "POST")) {

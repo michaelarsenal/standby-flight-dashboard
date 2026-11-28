@@ -1,7 +1,7 @@
 import { recordTrigger } from "./db.ts";
 import type { Env, FlightCandidate, InboundFlightInfo, ReadinessLevel, WatchedFlight } from "./types.ts";
 
-async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
+export async function generateGeminiBriefing(env: Env, context: string): Promise<string | null> {
   const apiKey = (env.GEMINI_API_KEY || "").trim();
   if (!apiKey) return null;
   try {
